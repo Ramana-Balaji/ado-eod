@@ -7,7 +7,7 @@ import { z } from "zod";
 import { loadRules } from "./rules.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, TicketDraft } from "./draft.js";
+import { buildDrafts, EOD_MARKER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 const { rules, sources, configErrors } = loadRules();
@@ -141,8 +141,8 @@ server.tool(
 
         // idempotency: a same-day marker means UPDATE that comment and skip hour fields
         const comments = await ado.getComments(u.ticketId);
-        const markerDate = u.commentMarkdown.match(/^<!-- eod:(\d{4}-\d{2}-\d{2}):/)?.[1];
-        const dup = comments.find((c) => markerDate && c.text.startsWith(`<!-- eod:${markerDate}:`));
+        const markerDate = u.commentMarkdown.match(EOD_MARKER_RE)?.[1];
+        const dup = markerDate ? findEodComment(comments, markerDate) : undefined;
         const skipHours = Boolean(dup);
 
         if (dup) await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format);

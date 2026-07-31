@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday } from "../src/worklog.js";
-import { attribute, splitHours } from "../src/draft.js";
+import { attribute, splitHours, eodMarker, findEodComment, EOD_MARKER_RE } from "../src/draft.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
 import type { DayEvidence, SessionRecord } from "../src/worklog.js";
@@ -131,6 +131,21 @@ test("localToday is the local calendar date", () => {
   const now = new Date();
   const expected = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   assert.equal(localToday(), expected);
+});
+
+test("eod marker survives ADO's Markdown sanitization (no HTML comments) and is found", () => {
+  // ADO strips <!-- --> from Markdown comments — discovered live; marker must be inline code
+  const marker = eodMarker("2026-08-01", ["461712ca-full-id", "38869001-full-id"]);
+  assert.equal(marker.includes("<!--"), false);
+  assert.match(marker, EOD_MARKER_RE);
+  const comments = [
+    { text: "unrelated" },
+    { text: `**2026-08-01 — implementation** (2h)\n\nwork\n\n---\n${marker}` },
+    { text: `old day\n\n---\n${eodMarker("2026-07-31", ["x"])}` },
+  ];
+  assert.equal(findEodComment(comments, "2026-08-01"), comments[1]);
+  assert.equal(findEodComment(comments, "2026-07-30"), undefined);
+  assert.equal(EOD_MARKER_RE.exec(comments[1].text)?.[1], "2026-08-01");
 });
 
 test("cumulative hours math: add to current, floor remaining at 0", () => {

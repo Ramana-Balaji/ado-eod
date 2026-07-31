@@ -33,7 +33,20 @@ export interface DraftInput {
   completion?: { ticketId: number; tester?: string }; // user says work is complete
 }
 
-const EOD_MARKER_RE = /^<!-- eod:(\d{4}-\d{2}-\d{2}):/;
+// ADO strips HTML comments (<!-- -->) from Markdown comments, so the idempotency marker
+// is a visible footer in inline code — quiet, greppable, and it survives sanitization.
+export const EOD_MARKER_RE = /`eod:(\d{4}-\d{2}-\d{2}):[^`]*`/;
+
+export function eodMarker(date: string, sessionIds: string[]): string {
+  return `\`eod:${date}:${sessionIds.map((s) => s.slice(0, 8)).join(",")}\``;
+}
+
+export function findEodComment<T extends { text: string }>(comments: T[], date: string): T | undefined {
+  return comments.find((c) => {
+    const m = c.text.match(EOD_MARKER_RE);
+    return m?.[0].startsWith(`\`eod:${date}:`);
+  });
+}
 
 /** Attribution: explicit → evidence ticket ids. Groups sessions per ticket. */
 export function attribute(input: DraftInput): Map<number, SessionRecord[]> {
@@ -228,7 +241,6 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
     }
   }
 
-  const marker = `<!-- eod:${input.evidence.date}:${draft.sessions.join(",")} -->\n`;
   let body = render(rules.comment.template, vars);
   if (draft.proposedState && draft.signoff?.resolved) {
     const mention = draft.signoff.identityId ? `@<${draft.signoff.identityId}>` : `@${draft.signoff.tester}`;
@@ -236,5 +248,5 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
   } else if (draft.proposedState && draft.signoff && !draft.signoff.resolved) {
     body += "\n" + render(rules.comment.signoffTemplate, { testerMention: `@${draft.signoff.tester}` }) + "\n\n> ⚠ identity not resolved — mention will not notify";
   }
-  draft.commentMarkdown = marker + body;
+  draft.commentMarkdown = body.trimEnd() + "\n\n---\n" + eodMarker(input.evidence.date, draft.sessions);
 }
