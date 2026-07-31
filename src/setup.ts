@@ -5,7 +5,12 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HOME = homedir();
-const serverCmd = { command: "node", args: [fileURLToPath(new URL("./cli.js", import.meta.url)), "serve"] };
+const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+// Running from the npx cache? That path gets evicted — configs must re-resolve via npx.
+// A local clone gets a stable node+path command instead (faster, works offline).
+const serverCmd = /[\\/]_npx[\\/]/.test(cliPath)
+  ? { command: "npx", args: ["-y", "github:Ramana-Balaji/ado-eod", "serve"] }
+  : { command: "node", args: [cliPath, "serve"] };
 
 interface Ide {
   name: string;
