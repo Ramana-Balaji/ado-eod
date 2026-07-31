@@ -1,0 +1,67 @@
+# ado-eod rules — shipped defaults.
+# Admins override via an org rules file (Phase 2); users via ~/.ado-eod/rules.yaml.
+# Later files win per-key. `eod_status` shows which file each rule came from.
+version: 1
+
+ado:
+  org: "" # set via: npx ado-eod setup --org <yourorg>   (dev.azure.com/<yourorg>)
+  project: "" # default project for drafts and reports
+  ticketIdPattern: '[A-Z]{2,5}-(\d+)' # how ticket ids appear in your branches/commits, e.g. AB-1234
+
+# Where to look for git repos when attributing work
+repoRoots:
+  - ~/Documents
+
+applies: # who / what / where this tool may update
+  projects: [] # empty = any project the caller can see
+  workItemTypes: [] # empty = any type (covers custom process templates)
+  onlyMyTickets: true # refuse tickets not assigned to the caller
+  blockStates: [] # empty = no state blocks updating
+
+comment: # format + mandatory sections
+  format: markdown
+  required: [summary, next, testScenarios, description, acceptanceCriteria]
+  template: |
+    **{{date}} — {{workType}}** ({{hours}}h)
+
+    {{summary}}
+
+    | Repo | Change |
+    |---|---|
+    {{#repos}}| {{name}} | {{detail}} |
+    {{/repos}}
+
+    **Issues hit**
+    {{#issues}}- {{.}}
+    {{/issues}}
+
+    **Test scenarios**
+    {{#testScenarios}}- {{.}}
+    {{/testScenarios}}
+
+    **Next:** {{next}}
+  signoffTemplate: | # appended ONLY when completion is proposed
+    **Status:** complete — tested with {{testerMention}}.
+    {{testerMention}} could you confirm this works as expected and the ticket can be closed?
+
+completion:
+  maxProposedState: Resolved # tool never proposes Closed — tester closes
+  requireTester: true # completion draft without a tester → ask
+
+testScenarioField: # field appends per work item type
+  User Story: Microsoft.VSTS.Common.AcceptanceCriteria
+  Bug: Microsoft.VSTS.TCM.ReproSteps
+
+hours:
+  maxPerDay: 14
+  idleGapMinutes: 30
+  roundToHours: 0.5
+
+fields:
+  completedWork: true
+  remainingWork: true
+  state: true
+  longText: [System.Description, Microsoft.VSTS.TCM.ReproSteps]
+
+redact:
+  extraPatterns: [] # additive only — base patterns cannot be removed

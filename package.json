@@ -1,0 +1,39 @@
+{
+  "name": "ado-eod",
+  "version": "0.1.0",
+  "description": "End-of-day Azure DevOps ticket updates and admin rollups, from inside your AI IDE",
+  "type": "module",
+  "bin": {
+    "ado-eod": "dist/src/cli.js"
+  },
+  "main": "dist/src/index.js",
+  "files": [
+    "dist/src",
+    "rules.default.yaml"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "start": "node dist/src/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ramana-Balaji/ado-eod.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/identity-cache-persistence": "^1.1.1",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
