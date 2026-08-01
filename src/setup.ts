@@ -207,11 +207,16 @@ export async function setup(argv: string[] = []): Promise<void> {
     console.log("\nSigning in to Azure DevOps (a browser window may open once)…");
     try {
       const { AdoClient } = await import("./ado.js");
-      const me = await new AdoClient(rules).whoAmI();
+      // never hang the terminal — an unanswered browser prompt otherwise waits forever
+      const me = await Promise.race([
+        new AdoClient(rules).whoAmI(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timed out after 120s")), 120_000).unref()),
+      ]);
       console.log(`  ✓ Signed in as ${me.displayName} <${me.email}>`);
     } catch (e: any) {
-      console.log(`  ✗ Sign-in failed: ${e.message?.slice(0, 200)}`);
-      console.log("  Fix: run `az login` if you have Azure CLI, or set ADO_EOD_PAT to a personal access token.");
+      console.log(`  ✗ Sign-in incomplete: ${e.message?.slice(0, 200)}`);
+      console.log("  You can finish later — the first tool call will prompt again.");
+      console.log("  Alternatives: `az login` if you have Azure CLI, or set ADO_EOD_PAT to a personal access token.");
     }
   }
 
