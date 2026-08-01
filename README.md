@@ -41,6 +41,12 @@ That one command:
 
 Restart your IDE afterwards. Done.
 
+Setup installs two things per IDE: the **MCP server** (the six tools) and the **skill** —
+the workflow your assistant follows (collect evidence → draft → show you → wait for yes →
+post). Claude Code, Cursor and Codex get a `SKILL.md`; Antigravity gets a rules block. The
+server also carries the same instructions internally, so any other MCP client you point at
+it behaves correctly too.
+
 > No Azure CLI needed. Sign-in is remembered in your OS's secure store (macOS Keychain /
 > Windows credential store / Linux libsecret), so you won't be asked again for months.
 > If your machine can't use the secure store, set `ADO_EOD_PAT` to a

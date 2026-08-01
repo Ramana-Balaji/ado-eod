@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAdoInput } from "../src/setup.js";
+import { parseAdoInput, upsertMarkerBlock, AG_MARKERS } from "../src/setup.js";
+
+test("upsertMarkerBlock appends once, then replaces — never duplicates on re-run", () => {
+  const v1 = upsertMarkerBlock("# my own rules\n", "ado-eod skill v1");
+  assert.equal(v1.includes("ado-eod skill v1"), true);
+  assert.equal(v1.startsWith("# my own rules"), true); // user content preserved
+  const v2 = upsertMarkerBlock(v1, "ado-eod skill v2");
+  assert.equal(v2.includes("ado-eod skill v2"), true);
+  assert.equal(v2.includes("ado-eod skill v1"), false); // replaced, not stacked
+  assert.equal(v2.split(AG_MARKERS[0]).length, 2); // exactly one start marker
+  // empty file case
+  assert.equal(upsertMarkerBlock("", "x").trim().startsWith(AG_MARKERS[0]), true);
+});
 
 test("parseAdoInput accepts org names and pasted URLs", () => {
   assert.deepEqual(parseAdoInput("contoso"), { org: "contoso" });

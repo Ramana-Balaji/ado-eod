@@ -16,6 +16,29 @@ interface Ide {
   name: string;
   detect: () => boolean;
   wire: () => string; // returns human-readable result
+  /** Install the workflow skill for this IDE. Returns a result note, or null when unsupported. */
+  installSkill?: (skillText: string) => string | null;
+}
+
+const skillSource = join(dirname(dirname(fileURLToPath(new URL(import.meta.url)))), "..", "skill", "SKILL.md");
+
+/** Copy SKILL.md into a skills dir (Claude Code / Cursor / Codex all use the same layout). */
+function dropSkill(dir: string, skillText: string): string {
+  const dest = join(dir, "ado-eod", "SKILL.md");
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, skillText);
+  return `skill installed at ${dest.replace(HOME, "~")}`;
+}
+
+export const AG_MARKERS = ["<!-- ado-eod:start -->", "<!-- ado-eod:end -->"] as const;
+
+/** Replace-or-append a marker-guarded block — re-runs must never duplicate it. */
+export function upsertMarkerBlock(existing: string, block: string): string {
+  const [start, end] = AG_MARKERS;
+  const guarded = `${start}\n${block}\n${end}`;
+  const re = new RegExp(`${start}[\\s\\S]*?${end}`);
+  if (re.test(existing)) return existing.replace(re, guarded);
+  return existing ? `${existing.trimEnd()}\n\n${guarded}\n` : `${guarded}\n`;
 }
 
 function readJson(path: string): any {
@@ -61,6 +84,7 @@ const IDES: Ide[] = [
         return "written to ~/.claude.json";
       }
     },
+    installSkill: (s) => dropSkill(join(HOME, ".claude", "skills"), s),
   },
   {
     name: "Codex",
@@ -74,6 +98,7 @@ const IDES: Ide[] = [
       writeFileSync(path, current + block);
       return "appended to ~/.codex/config.toml";
     },
+    installSkill: (s) => dropSkill(join(HOME, ".codex", "skills"), s),
   },
   {
     name: "Cursor",
@@ -85,6 +110,7 @@ const IDES: Ide[] = [
       });
       return "written to ~/.cursor/mcp.json";
     },
+    installSkill: (s) => dropSkill(join(HOME, ".cursor", "skills"), s),
   },
   {
     name: "Antigravity",
@@ -95,6 +121,16 @@ const IDES: Ide[] = [
         doc.mcpServers["ado-eod"] = serverCmd;
       });
       return "written to ~/.gemini/antigravity/mcp_config.json";
+    },
+    installSkill: (s) => {
+      // no skills dir — the instruction file is global_rules.md; marker-guarded so
+      // re-runs replace our block instead of stacking duplicates
+      const path = join(HOME, ".codeium", "memories", "global_rules.md");
+      const body = s.replace(/^---[\s\S]*?---\n/, ""); // frontmatter is skills-format-specific
+      mkdirSync(dirname(path), { recursive: true });
+      const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+      writeFileSync(path, upsertMarkerBlock(existing, body));
+      return `rules block written to ${path.replace(HOME, "~")}`;
     },
   },
 ];
@@ -142,6 +178,7 @@ export async function setup(argv: string[] = []): Promise<void> {
     console.log('    Re-run:  npx ado-eod setup --org contoso --project "Contoso Web"\n');
   }
 
+  const skillText = existsSync(skillSource) ? readFileSync(skillSource, "utf8") : null;
   const found: string[] = [];
   for (const ide of IDES) {
     if (!ide.detect()) continue;
@@ -149,6 +186,10 @@ export async function setup(argv: string[] = []): Promise<void> {
       const result = ide.wire();
       found.push(ide.name);
       console.log(`  ✓ ${ide.name} — ${result}`);
+      if (skillText && ide.installSkill) {
+        const note = ide.installSkill(skillText);
+        if (note) console.log(`    ↳ ${note}`);
+      }
     } catch (e: any) {
       console.log(`  ✗ ${ide.name} — ${e.message}. Fix: check the file is valid JSON/TOML, then re-run \`npx ado-eod setup\`.`);
     }

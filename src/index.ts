@@ -26,7 +26,24 @@ function json(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-export const server = new McpServer({ name: "ado-eod", version: "0.1.0" });
+// The workflow contract travels WITH the server — every MCP client gets it at initialize,
+// even ones setup never wrote a skill file for. The per-IDE SKILL.md is the richer layer.
+const INSTRUCTIONS = `End-of-day Azure DevOps ticket updates. Trigger phrases: "update my ticket", "log my day", or a pasted dev.azure.com work item link.
+
+Daily flow — follow this order:
+1. eod_worklog for the day's evidence.
+2. eod_draft (tickets the user named; a 2-4 sentence factual "notes" summary from the live conversation; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested).
+3. Show the full draft in chat: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions.
+4. If missingSections is non-empty, ask the user for exactly those items and redraft. Never invent content for a required section.
+5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown. Never post unreviewed.
+
+Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. Put acceptance criteria / test scenarios / tester into the org's dedicated fields (mappings in ~/.ado-eod/rules.yaml) via the "fields"/"setFields" args — not into one giant Description.
+
+Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
+
+Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
+
+export const server = new McpServer({ name: "ado-eod", version: "0.1.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
