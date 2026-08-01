@@ -22,6 +22,7 @@ export interface TicketDraft {
   commentMarkdown: string;
   missingSections: string[]; // required sections the evidence couldn't fill → ask user
   fieldAppends: Array<{ field: string; markdown: string }>;
+  setFields?: Record<string, any>; // direct sets, e.g. the tester identity field
   signoff?: { tester: string; resolved: boolean; displayName?: string; identityId?: string };
   existingEodComment?: { id: number; date: string }; // idempotency marker found
 }
@@ -186,6 +187,8 @@ async function applyCompletion(draft: TicketDraft, wi: WorkItem, ado: AdoClient,
     draft.signoff = identity
       ? { tester: completion.tester, resolved: true, displayName: identity.displayName, identityId: identity.id }
       : { tester: completion.tester, resolved: false };
+    // fill the org's Tester identity field too, when the rules name one
+    if (identity && rules.testerField) draft.setFields = { ...draft.setFields, [rules.testerField]: completion.tester };
   } else if (rules.completion.requireTester) {
     draft.missingSections.push("tester (completion proposed — who tested this?)");
   }

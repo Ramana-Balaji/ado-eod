@@ -120,6 +120,10 @@ server.tool(
         remainingWork: z.number().optional(),
         state: z.string().optional(),
         fieldAppends: z.array(z.object({ field: z.string(), markdown: z.string() })).optional(),
+        setFields: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe("Fields set directly (not appended) — e.g. the tester identity field on completion"),
       }),
     ),
   },
@@ -162,6 +166,10 @@ server.tool(
           fields[fa.field] = current ? `${current}\n\n---\n\n${fa.markdown}` : fa.markdown;
           markdownFields.push(fa.field);
         }
+        for (const [k, v] of Object.entries(u.setFields ?? {})) {
+          fields[k] = v;
+          if (rules.fields.markdownFields?.includes(k)) markdownFields.push(k);
+        }
         if (Object.keys(fields).length) await ado.updateWorkItem(u.ticketId, u.rev, fields, markdownFields);
         results.push({ ticketId: u.ticketId, ok: true, skippedHours: skipHours });
       } catch (e: any) {
@@ -182,14 +190,20 @@ server.tool(
     descriptionMarkdown: z.string().optional(),
     assignToSelf: z.boolean().optional().describe("Assign to the authenticated user"),
     tags: z.array(z.string()).optional(),
+    fields: z
+      .record(z.string(), z.any())
+      .optional()
+      .describe(
+        "Additional fields by reference name — use the org's dedicated fields (acceptance criteria, test scenarios, tester) instead of stuffing everything into the description",
+      ),
   },
-  async ({ type, title, descriptionMarkdown, assignToSelf, tags }) => {
+  async ({ type, title, descriptionMarkdown, assignToSelf, tags, fields: extraFields }) => {
     const blocked = notReady();
     if (blocked) return blocked;
-    const extra: Record<string, any> = {};
+    const extra: Record<string, any> = { ...(extraFields ?? {}) };
     if (assignToSelf) extra["System.AssignedTo"] = (await ado.whoAmI()).email;
     if (tags?.length) extra["System.Tags"] = tags.join("; ");
-    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra);
+    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, rules.fields.markdownFields ?? []);
     return json({
       id: wi.id,
       rev: wi.rev,

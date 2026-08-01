@@ -22,12 +22,18 @@ export interface Rules {
   };
   completion: { maxProposedState: string; requireTester: boolean };
   testScenarioField: Record<string, string>;
+  /** Per-type field for acceptance criteria (e.g. Enhancement → Microsoft.VSTS.Common.AcceptanceCriteria). */
+  acceptanceCriteriaField?: Record<string, string>;
+  /** Identity field the sign-off tester is written to (e.g. Custom.Tester). Empty = skip. */
+  testerField?: string;
   hours: { maxPerDay: number; idleGapMinutes: number; roundToHours: number };
   fields: {
     completedWork: boolean;
     remainingWork: boolean;
     state: boolean;
     longText: string[];
+    /** Large-text fields written with the paired multilineFieldsFormat=Markdown op. */
+    markdownFields?: string[];
   };
   redact: { extraPatterns: string[] };
 }

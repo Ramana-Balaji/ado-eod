@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday } from "../src/worklog.js";
 import { attribute, splitHours, eodMarker, findEodComment, EOD_MARKER_RE } from "../src/draft.js";
+import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
 import type { DayEvidence, SessionRecord } from "../src/worklog.js";
@@ -131,6 +132,20 @@ test("localToday is the local calendar date", () => {
   const now = new Date();
   const expected = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   assert.equal(localToday(), expected);
+});
+
+test("buildCreateOps pairs a Markdown format op for fields the rules mark as markdown", () => {
+  const ops = buildCreateOps(
+    "title",
+    "## desc",
+    { "Custom.Testsenarios": "1. scenario", "System.AssignedTo": "a@b.c" },
+    ["Custom.Testsenarios"],
+  );
+  const paths = ops.map((o: any) => o.path);
+  assert.equal(paths.includes("/fields/Custom.Testsenarios"), true);
+  assert.equal(paths.includes("/multilineFieldsFormat/Custom.Testsenarios"), true); // paired op present
+  assert.equal(paths.includes("/multilineFieldsFormat/System.AssignedTo"), false); // identity field: no format op
+  assert.equal(paths.includes("/multilineFieldsFormat/System.Description"), true); // description always Markdown
 });
 
 test("eod marker survives ADO's Markdown sanitization (no HTML comments) and is found", () => {

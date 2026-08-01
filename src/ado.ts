@@ -170,17 +170,12 @@ export class AdoClient {
     title: string,
     descriptionMarkdown?: string,
     extra: Record<string, any> = {},
+    markdownFields: string[] = [],
   ): Promise<WorkItem> {
-    const ops: any[] = [{ op: "add", path: "/fields/System.Title", value: title }];
-    if (descriptionMarkdown) {
-      ops.push({ op: "add", path: "/fields/System.Description", value: descriptionMarkdown });
-      ops.push({ op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" });
-    }
-    for (const [k, v] of Object.entries(extra)) ops.push({ op: "add", path: `/fields/${k}`, value: v });
     return this.req(
       "POST",
       `${this.baseProject}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=${API}`,
-      ops,
+      buildCreateOps(title, descriptionMarkdown, extra, markdownFields),
       "application/json-patch+json",
     );
   }
@@ -195,8 +190,28 @@ export class AdoClient {
       ops.push({ op: "add", path: `/fields/${k}`, value: v });
     }
     for (const f of markdownFields) {
-      ops.push({ op: "add", path: `/multilineFieldsFormat/${f}`, value: "Markdown" });
+      // a format op without a matching value op is rejected ("type changed without a value")
+      if (f in fields) ops.push({ op: "add", path: `/multilineFieldsFormat/${f}`, value: "Markdown" });
     }
     return this.req("PATCH", `${this.base}/_apis/wit/workitems/${id}?api-version=${API}`, ops, "application/json-patch+json");
   }
+}
+
+/** Pure op-builder for createWorkItem — extra fields listed in markdownFields get the paired format op. */
+export function buildCreateOps(
+  title: string,
+  descriptionMarkdown: string | undefined,
+  extra: Record<string, any>,
+  markdownFields: string[],
+): any[] {
+  const ops: any[] = [{ op: "add", path: "/fields/System.Title", value: title }];
+  if (descriptionMarkdown) {
+    ops.push({ op: "add", path: "/fields/System.Description", value: descriptionMarkdown });
+    ops.push({ op: "add", path: "/multilineFieldsFormat/System.Description", value: "Markdown" });
+  }
+  for (const [k, v] of Object.entries(extra)) {
+    ops.push({ op: "add", path: `/fields/${k}`, value: v });
+    if (markdownFields.includes(k)) ops.push({ op: "add", path: `/multilineFieldsFormat/${k}`, value: "Markdown" });
+  }
+  return ops;
 }

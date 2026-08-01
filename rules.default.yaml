@@ -51,6 +51,9 @@ completion:
 testScenarioField: # field appends per work item type
   User Story: Microsoft.VSTS.Common.AcceptanceCriteria
   Bug: Microsoft.VSTS.TCM.ReproSteps
+acceptanceCriteriaField: # dedicated acceptance-criteria field per work item type
+  User Story: Microsoft.VSTS.Common.AcceptanceCriteria
+testerField: "" # identity field the sign-off tester is written to (e.g. Custom.Tester); empty = skip
 
 hours:
   maxPerDay: 14
@@ -62,6 +65,8 @@ fields:
   remainingWork: true
   state: true
   longText: [System.Description, Microsoft.VSTS.TCM.ReproSteps]
+  # large-text fields written as Markdown (paired multilineFieldsFormat op)
+  markdownFields: [System.Description, Microsoft.VSTS.Common.AcceptanceCriteria, Microsoft.VSTS.TCM.ReproSteps]
 
 redact:
   extraPatterns: [] # additive only — base patterns cannot be removed
