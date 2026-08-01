@@ -39,7 +39,13 @@ npx github:Ramana-Balaji/ado-eod setup --org contoso --project "Contoso Web"
 > Use the plugin *or* setup's Claude Code wiring, not both — otherwise the server is
 > registered twice.
 
-### Other IDEs (Cursor, Codex, Antigravity) — one command
+### Cursor — install as a plugin (recommended)
+
+This repo is also a Cursor plugin (Cursor 2.5+): in Cursor, run `/add-plugin` and paste
+`https://github.com/Ramana-Balaji/ado-eod`. That installs the MCP server and the skill
+together. Same rule applies: plugin *or* setup's Cursor wiring, not both.
+
+### Other IDEs (Codex, Antigravity) — one command
 
 ```bash
 npx github:Ramana-Balaji/ado-eod setup
@@ -110,8 +116,8 @@ org's dedicated fields instead of one giant Description.
 
 | IDE | Where the skill lands | How it triggers |
 |---|---|---|
-| Claude Code | `~/.claude/skills/ado-eod/SKILL.md` | `/ado-eod`, "update my ticket", "log my day", a pasted work-item link |
-| Cursor | `~/.cursor/skills/ado-eod/SKILL.md` | same phrases |
+| Claude Code | via the plugin (or `~/.claude/skills/ado-eod/SKILL.md` if you used setup) | `/ado-eod`, "update my ticket", "log my day", a pasted work-item link |
+| Cursor | via the plugin (or `~/.cursor/skills/ado-eod/SKILL.md` if you used setup) | same phrases |
 | Codex | `~/.codex/skills/ado-eod/SKILL.md` | same phrases |
 | Antigravity | marker-guarded block in `~/.codeium/memories/global_rules.md` | same phrases |
 | any other MCP client | nothing to install — the server announces the same instructions during the MCP handshake | automatic |
