@@ -41,11 +41,8 @@ That one command:
 
 Restart your IDE afterwards. Done.
 
-Setup installs two things per IDE: the **MCP server** (the six tools) and the **skill** —
-the workflow your assistant follows (collect evidence → draft → show you → wait for yes →
-post). Claude Code, Cursor and Codex get a `SKILL.md`; Antigravity gets a rules block. The
-server also carries the same instructions internally, so any other MCP client you point at
-it behaves correctly too.
+Setup installs two things per IDE: the **MCP server** (the six tools) and the **skill**
+that teaches your assistant how to use them — see [The skill](#the-skill).
 
 > No Azure CLI needed. Sign-in is remembered in your OS's secure store (macOS Keychain /
 > Windows credential store / Linux libsecret), so you won't be asked again for months.
@@ -80,6 +77,28 @@ The comment then ends with a sign-off handoff that @-mentions the tester:
 
 The tool refuses to set a ticket to Closed or Removed — enforced in the server, not just
 the prompt. The tester confirms and closes — that's the point.
+
+## The skill
+
+Tools alone don't make an assistant behave — the **skill** is the workflow contract that
+ships with this package and gets installed by setup, so every machine follows the same
+steps:
+
+1. collect the day's evidence, 2. draft, 3. **show you everything**, 4. ask (never invent)
+when a required section is empty, 5. post only after your explicit yes — and use your
+org's dedicated fields instead of one giant Description.
+
+| IDE | Where the skill lands | How it triggers |
+|---|---|---|
+| Claude Code | `~/.claude/skills/ado-eod/SKILL.md` | `/ado-eod`, "update my ticket", "log my day", a pasted work-item link |
+| Cursor | `~/.cursor/skills/ado-eod/SKILL.md` | same phrases |
+| Codex | `~/.codex/skills/ado-eod/SKILL.md` | same phrases |
+| Antigravity | marker-guarded block in `~/.codeium/memories/global_rules.md` | same phrases |
+| any other MCP client | nothing to install — the server announces the same instructions during the MCP handshake | automatic |
+
+The skill is one file in this repo ([`skill/SKILL.md`](skill/SKILL.md)). When it changes,
+re-running `npx github:Ramana-Balaji/ado-eod setup` refreshes every IDE — re-runs replace
+the installed copy, they never stack duplicates.
 
 ## For leads and admins
 
@@ -159,9 +178,6 @@ Markdown.
 | `eod_post` | **writes ADO** | posts a confirmed draft (comment, hours, state, field appends/sets); refuses without `confirmed: true` |
 | `eod_create` | **writes ADO** | creates a work item, with `fields` for your org's dedicated fields; refuses without `confirmed: true` |
 
-The server also announces its own usage instructions over MCP, and setup installs a
-matching skill per IDE — so the assistant follows the same draft → confirm → post
-contract everywhere.
 
 ## Development
 
