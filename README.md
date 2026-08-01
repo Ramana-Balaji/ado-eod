@@ -33,8 +33,11 @@ later with `claude plugin update ado-eod`. Then run the setup once for your org 
 (and any other IDEs you use):
 
 ```bash
-npx github:Ramana-Balaji/ado-eod setup --org contoso --project "Contoso Web"
+npx github:Ramana-Balaji/ado-eod setup
 ```
+
+It asks one question — paste your Azure DevOps address (the page where your tickets
+live), and it works out your organization and project from it.
 
 > Use the plugin *or* setup's Claude Code wiring, not both — otherwise the server is
 > registered twice.
@@ -52,11 +55,12 @@ npx github:Ramana-Balaji/ado-eod setup
 ```
 
 It asks one question — **paste your Azure DevOps address** (the page where your tickets
-are, e.g. `https://dev.azure.com/contoso/Contoso%20Web`) — and figures out the rest.
-If you already know your organization name you can skip the question:
+are; it looks like `https://dev.azure.com/<your-org>/<your-project>`) — and figures out
+the rest. If you already know your organization and project names you can skip the
+question by passing them yourself:
 
 ```bash
-npx github:Ramana-Balaji/ado-eod setup --org contoso --project "Contoso Web"
+npx github:Ramana-Balaji/ado-eod setup --org <your-org> --project "<your project>"
 ```
 
 That one command:

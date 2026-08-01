@@ -154,7 +154,7 @@ export async function setup(argv: string[] = []): Promise<void> {
     const { createInterface } = await import("node:readline/promises");
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     console.log("  Where do your tickets live? Open Azure DevOps in your browser and");
-    console.log("  copy the address — it looks like: https://dev.azure.com/contoso/Contoso%20Web\n");
+    console.log("  copy the address — it looks like: https://dev.azure.com/<your-org>/<your-project>\n");
     const answer = (await rl.question("  Paste that address (or just your organization name): ")).trim();
     ({ org, project } = parseAdoInput(answer));
     if (org && !project) {
@@ -177,7 +177,7 @@ export async function setup(argv: string[] = []): Promise<void> {
   } else if (!existsSync(userRulesPath)) {
     console.log("  ! No Azure DevOps organization configured yet.");
     console.log("    Your org is the first name in your Azure DevOps address: dev.azure.com/<org>");
-    console.log('    Re-run:  npx ado-eod setup --org contoso --project "Contoso Web"\n');
+    console.log('    Re-run:  npx ado-eod setup --org <your-org> --project "<your project>"\n');
   }
 
   const skillText = existsSync(skillSource) ? readFileSync(skillSource, "utf8") : null;
