@@ -15,7 +15,8 @@ const serverCmd = /[\\/]_npx[\\/]/.test(cliPath)
 interface Ide {
   name: string;
   detect: () => boolean;
-  wire: () => string; // returns human-readable result
+  /** Human-readable result, or null when the IDE already has it and must be left alone. */
+  wire: () => string | null;
   /** Install the workflow skill for this IDE. Returns a result note, or null when unsupported. */
   installSkill?: (skillText: string) => string | null;
 }
@@ -67,11 +68,26 @@ export function parseAdoInput(input: string): { org?: string; project?: string }
   return {};
 }
 
+/**
+ * True when `claude plugin install ado-eod@…` already provided the server + skill.
+ * Setup must then leave Claude Code alone — wiring it again registers the server twice.
+ */
+export function hasAdoEodPlugin(installedPluginsJson: string): boolean {
+  try {
+    const plugins = JSON.parse(installedPluginsJson)?.plugins;
+    return Object.keys(plugins ?? {}).some((k) => k.split("@")[0] === "ado-eod");
+  } catch {
+    return false;
+  }
+}
+
 const IDES: Ide[] = [
   {
     name: "Claude Code",
     detect: () => existsSync(join(HOME, ".claude")),
     wire: () => {
+      const registry = join(HOME, ".claude", "plugins", "installed_plugins.json");
+      if (existsSync(registry) && hasAdoEodPlugin(readFileSync(registry, "utf8"))) return null;
       try {
         execFileSync("claude", ["mcp", "add", "--scope", "user", "ado-eod", "--", serverCmd.command, ...serverCmd.args], { stdio: "pipe" });
         return "registered via `claude mcp add`";
@@ -187,6 +203,11 @@ export async function setup(argv: string[] = []): Promise<void> {
     try {
       const result = ide.wire();
       found.push(ide.name);
+      if (result === null) {
+        // plugin install already ships server + skill — touching either would duplicate it
+        console.log(`  ✓ ${ide.name} — plugin already installed; left as-is`);
+        continue;
+      }
       console.log(`  ✓ ${ide.name} — ${result}`);
       if (skillText && ide.installSkill) {
         const note = ide.installSkill(skillText);

@@ -29,24 +29,29 @@ claude plugin install ado-eod@ado-eod
 ```
 
 That gives Claude Code the MCP server **and** the skill in one versioned unit — update
-later with `claude plugin update ado-eod`. Then run the setup once for your org config
-(and any other IDEs you use):
+later with `claude plugin update ado-eod`.
+
+The plugin does not know your Azure DevOps org, and it can't sign you in — so run setup
+once as well:
 
 ```bash
 npx github:Ramana-Balaji/ado-eod setup
 ```
 
 It asks one question — paste your Azure DevOps address (the page where your tickets
-live), and it works out your organization and project from it.
+live) — then signs you in and wires up any *other* IDEs you have. It detects the plugin
+and leaves Claude Code's own config alone, so the server is never registered twice.
 
-> Use the plugin *or* setup's Claude Code wiring, not both — otherwise the server is
-> registered twice.
+Then restart Claude Code.
 
 ### Cursor — install as a plugin (recommended)
 
 This repo is also a Cursor plugin (Cursor 2.5+): in Cursor, run `/add-plugin` and paste
 `https://github.com/Ramana-Balaji/ado-eod`. That installs the MCP server and the skill
-together. Same rule applies: plugin *or* setup's Cursor wiring, not both.
+together. You still need `setup` for the org config and sign-in — but unlike Claude
+Code, setup does not yet detect a Cursor plugin install, so it will also write the
+server into `~/.cursor/mcp.json`. Remove that `ado-eod` entry afterwards if you use the
+plugin.
 
 ### Other IDEs (Codex, Antigravity) — one command
 

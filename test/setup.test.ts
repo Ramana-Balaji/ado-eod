@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseAdoInput, upsertMarkerBlock, AG_MARKERS } from "../src/setup.js";
+import { parseAdoInput, upsertMarkerBlock, AG_MARKERS, hasAdoEodPlugin } from "../src/setup.js";
 
 test("upsertMarkerBlock appends once, then replaces — never duplicates on re-run", () => {
   const v1 = upsertMarkerBlock("# my own rules\n", "ado-eod skill v1");
@@ -42,4 +42,25 @@ test("JSON merge preserves unrelated servers", () => {
   doc.mcpServers["ado-eod"] = { command: "node", args: ["/x/cli.js", "serve"] };
   assert.deepEqual(Object.keys(doc.mcpServers).sort(), ["ado-eod", "supabase"]);
   assert.equal(doc.mcpServers.supabase.serverUrl, "https://x");
+});
+
+test("hasAdoEodPlugin: setup skips Claude Code wiring when the plugin owns it", () => {
+  // real installed_plugins.json shape — keys are "<plugin>@<marketplace>"
+  const withPlugin = JSON.stringify({
+    version: 2,
+    plugins: {
+      "code-review@claude-plugins-official": [{ scope: "user" }],
+      "ado-eod@ado-eod": [{ scope: "user", version: "0.2.0" }],
+    },
+  });
+  assert.equal(hasAdoEodPlugin(withPlugin), true);
+  // a different marketplace still counts — same server, same duplicate risk
+  assert.equal(hasAdoEodPlugin(JSON.stringify({ plugins: { "ado-eod@my-fork": [{}] } })), true);
+  // not installed → setup must wire it
+  assert.equal(hasAdoEodPlugin(JSON.stringify({ version: 2, plugins: { "ponytail@ponytail": [{}] } })), false);
+  // a name that merely starts with "ado-eod" is a different plugin
+  assert.equal(hasAdoEodPlugin(JSON.stringify({ plugins: { "ado-eod-extras@x": [{}] } })), false);
+  // unreadable / empty registry → wire it rather than silently skipping setup
+  assert.equal(hasAdoEodPlugin("not json"), false);
+  assert.equal(hasAdoEodPlugin("{}"), false);
 });
