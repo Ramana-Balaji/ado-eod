@@ -371,7 +371,17 @@ function git(repo: string, args: string[]): string {
   }
 }
 
-export function collectGit(date: string, rules: Rules, sessionCwds: string[], redact: RegExp[] = []): GitEvidence[] {
+// a session covers a repo if its cwd overlaps the repo path OR it edited files inside it
+// (sessions routinely edit across repos — cwd alone misses that)
+export function repoHasSession(repo: string, sessions: Pick<SessionRecord, "cwd" | "files">[]): boolean {
+  return sessions.some(
+    (s) =>
+      (!!s.cwd && (s.cwd.startsWith(repo) || repo.startsWith(s.cwd))) ||
+      s.files.some((f) => f.startsWith(repo + "/")),
+  );
+}
+
+export function collectGit(date: string, rules: Rules, sessions: Pick<SessionRecord, "cwd" | "files">[], redact: RegExp[] = []): GitEvidence[] {
   const repos = new Set<string>();
   for (const root of rules.repoRoots.map(expandHome)) {
     if (!existsSync(root)) continue;
@@ -395,7 +405,7 @@ export function collectGit(date: string, rules: Rules, sessionCwds: string[], re
     const branch = git(repo, ["branch", "--show-current"]);
     if (!commits.length) continue;
     const ticketIds = extractTicketIds([...commits, branch], rules.ado.ticketIdPattern);
-    const hasSession = sessionCwds.some((c) => c && (c.startsWith(repo) || repo.startsWith(c)));
+    const hasSession = repoHasSession(repo, sessions);
     out.push({ repo, branch, commits, ticketIds, hasSession });
   }
   return out;
@@ -423,6 +433,6 @@ export async function collectDay(date: string, rules: Rules): Promise<DayEvidenc
     collectCursor(range, rules, redact, counters),
   ]);
   const sessions = [...claude, ...codex, ...cursor];
-  const git = collectGit(date, rules, sessions.map((s) => s.cwd ?? ""), redact);
+  const git = collectGit(date, rules, sessions, redact);
   return { date, sessions, git, redactedLineCount: counters.redacted };
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday } from "../src/worklog.js";
+import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession } from "../src/worklog.js";
 import { attribute, splitHours, eodMarker, findEodComment, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
@@ -171,4 +171,17 @@ test("cumulative hours math: add to current, floor remaining at 0", () => {
   const newRemaining = Math.max(0, current.remaining - todays);
   assert.equal(newCompleted, 7);
   assert.equal(newRemaining, 0);
+});
+
+test("repoHasSession: session editing files in a repo counts even when cwd is elsewhere", () => {
+  // real case 2026-08-01: session cwd was ~/Documents/Symphony but it edited 30+ files
+  // and made 11 commits under ~/Documents/ado-eod — must not be marked git-only
+  const repo = "/Users/bcs094/Documents/ado-eod";
+  const symphonySession = { cwd: "/Users/bcs094/Documents/Symphony", files: ["/Users/bcs094/Documents/ado-eod/src/worklog.ts"] };
+  assert.equal(repoHasSession(repo, [symphonySession]), true);
+  // cwd match still works, including cwd deeper than repo and with no files
+  assert.equal(repoHasSession(repo, [{ cwd: "/Users/bcs094/Documents/ado-eod/src", files: [] }]), true);
+  // no overlap → git-only; prefix sibling "/…/ado-eod2" must not match via files
+  assert.equal(repoHasSession(repo, [{ cwd: "/Users/bcs094/Documents/Symphony", files: ["/Users/bcs094/Documents/ado-eod2/x.ts"] }]), false);
+  assert.equal(repoHasSession(repo, [{ cwd: undefined, files: [] }]), false);
 });
