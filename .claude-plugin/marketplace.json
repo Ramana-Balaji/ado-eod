@@ -1,0 +1,12 @@
+{
+  "name": "ado-eod",
+  "description": "End-of-day Azure DevOps ticket updates from AI IDEs — draft, confirm, post",
+  "owner": { "name": "Ramana Balaji" },
+  "plugins": [
+    {
+      "name": "ado-eod",
+      "source": "./",
+      "description": "End-of-day Azure DevOps ticket updates from your AI IDE"
+    }
+  ]
+}

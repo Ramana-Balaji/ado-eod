@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ado-eod": {
+      "command": "npx",
+      "args": ["-y", "github:Ramana-Balaji/ado-eod", "serve"]
+    }
+  }
+}

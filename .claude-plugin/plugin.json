@@ -1,0 +1,10 @@
+{
+  "name": "ado-eod",
+  "version": "0.2.0",
+  "description": "End-of-day Azure DevOps ticket updates from your AI IDE — drafts comments, hours and state from your day's actual work; posts only after you confirm",
+  "author": { "name": "Ramana Balaji" },
+  "homepage": "https://github.com/Ramana-Balaji/ado-eod",
+  "repository": "https://github.com/Ramana-Balaji/ado-eod",
+  "license": "MIT",
+  "keywords": ["azure-devops", "mcp", "eod", "worklog", "tickets"]
+}

@@ -20,7 +20,7 @@ interface Ide {
   installSkill?: (skillText: string) => string | null;
 }
 
-const skillSource = join(dirname(dirname(fileURLToPath(new URL(import.meta.url)))), "..", "skill", "SKILL.md");
+const skillSource = join(dirname(dirname(fileURLToPath(new URL(import.meta.url)))), "..", "skills", "ado-eod", "SKILL.md");
 
 /** Copy SKILL.md into a skills dir (Claude Code / Cursor / Codex all use the same layout). */
 function dropSkill(dir: string, skillText: string): string {
@@ -84,7 +84,9 @@ const IDES: Ide[] = [
         return "written to ~/.claude.json";
       }
     },
-    installSkill: (s) => dropSkill(join(HOME, ".claude", "skills"), s),
+    installSkill: (s) =>
+      dropSkill(join(HOME, ".claude", "skills"), s) +
+      "\n      (tip: Claude Code can instead install this as a plugin — see the README)",
   },
   {
     name: "Codex",

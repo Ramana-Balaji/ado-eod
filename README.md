@@ -19,7 +19,27 @@ re-typing. You review a draft and say "yes". That's the whole workflow.
 
 ## Setup (once, ~2 minutes)
 
-You need [Node.js 20+](https://nodejs.org). Then:
+You need [Node.js 20+](https://nodejs.org).
+
+### Claude Code — install as a plugin (recommended)
+
+```bash
+claude plugin marketplace add Ramana-Balaji/ado-eod
+claude plugin install ado-eod@ado-eod
+```
+
+That gives Claude Code the MCP server **and** the skill in one versioned unit — update
+later with `claude plugin update ado-eod`. Then run the setup once for your org config
+(and any other IDEs you use):
+
+```bash
+npx github:Ramana-Balaji/ado-eod setup --org contoso --project "Contoso Web"
+```
+
+> Use the plugin *or* setup's Claude Code wiring, not both — otherwise the server is
+> registered twice.
+
+### Other IDEs (Cursor, Codex, Antigravity) — one command
 
 ```bash
 npx github:Ramana-Balaji/ado-eod setup

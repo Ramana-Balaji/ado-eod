@@ -10,7 +10,7 @@
   "files": [
     "dist/src",
     "rules.default.yaml",
-    "skill"
+    "skills"
   ],
   "engines": {
     "node": ">=20"
