@@ -106,14 +106,34 @@ org file → `~/.ado-eod/rules.yaml` (per machine), later files win per key:
 | `comment.required` | sections the draft must fill — missing ones are flagged and the assistant asks instead of posting hollow entries |
 | `comment.template` / `comment.signoffTemplate` | the comment format and the completion handoff |
 | `completion.*` | the maximum state the tool may propose; whether a tester is required |
-| `testScenarioField` | which work item field test scenarios are appended to, per type |
+| `testScenarioField` / `acceptanceCriteriaField` | which dedicated work item field each goes to, per type |
+| `testerField` | the identity field the sign-off tester is written to (e.g. `Custom.Tester`) |
 | `hours.*` | daily cap (default 14h), idle-gap threshold, rounding |
-| `fields.*` | which fields may be written at all (hours, state, long-text) |
+| `fields.*` | which fields may be written at all; `markdownFields` lists large-text fields written as real Markdown |
 | `redact.extraPatterns` | additional redaction patterns (base patterns can never be removed) |
 
 Two things are hard-coded and no rules file can disable them: **confirm-before-post**,
 and the **base redaction patterns** (passwords, tokens, connection strings and the like
 never leave your machine).
+
+### Mapping your org's custom fields
+
+Many process templates have dedicated fields for acceptance criteria, test scenarios, and
+testers — the tool fills those instead of dumping everything into the Description. Tell it
+your field names once, in `~/.ado-eod/rules.yaml` (or the org rules file):
+
+```yaml
+testScenarioField:
+  Enhancement: Custom.TestScenarios     # your org's reference names —
+acceptanceCriteriaField:                # find them under Organization settings
+  Enhancement: Microsoft.VSTS.Common.AcceptanceCriteria
+testerField: Custom.Tester              # identity field; filled on sign-off
+fields:
+  markdownFields: [System.Description, Microsoft.VSTS.Common.AcceptanceCriteria, Custom.TestScenarios]
+```
+
+Any field listed in `markdownFields` is stored as real Markdown (ADO otherwise silently
+treats it as HTML). Identity fields resolve from an email address.
 
 ## What it reads, what it writes
 
@@ -123,9 +143,10 @@ never leave your machine).
 appear in a draft — and you review every draft before anything is posted.
 
 **Writes (Azure DevOps, only after you confirm):** one comment per ticket per day
-(re-runs replace it — no double-posting, no double-counted hours), the two hour fields,
-optionally a state change and appends (never overwrites) to Description / Repro Steps /
-Acceptance Criteria.
+(re-runs update it in place — no double-posting, no double-counted hours), the two hour
+fields, optionally a state change, appends (never overwrites) to long-text fields, and
+direct sets for identity fields like the tester box. Everything long-form is written as
+Markdown.
 
 ## The tools (MCP)
 
@@ -135,8 +156,12 @@ Acceptance Criteria.
 | `eod_draft` | reads ADO | per-ticket draft: comment, hours, %, state |
 | `eod_status` | reads ADO | diagnostics — auth, config, rules in force |
 | `eod_report` | reads ADO | progress / people / breakdown / timeline |
-| `eod_post` | **writes ADO** | posts a confirmed draft; refuses without `confirmed: true` |
-| `eod_create` | **writes ADO** | creates a work item; refuses without `confirmed: true` |
+| `eod_post` | **writes ADO** | posts a confirmed draft (comment, hours, state, field appends/sets); refuses without `confirmed: true` |
+| `eod_create` | **writes ADO** | creates a work item, with `fields` for your org's dedicated fields; refuses without `confirmed: true` |
+
+The server also announces its own usage instructions over MCP, and setup installs a
+matching skill per IDE — so the assistant follows the same draft → confirm → post
+contract everywhere.
 
 ## Development
 
