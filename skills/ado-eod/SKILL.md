@@ -40,7 +40,9 @@ the org; only configure with an address the user gave in this conversation.
 
 Rules (enforced by the server, don't fight them): hours are cumulative and capped per
 day; the tool never proposes Closed — the tester closes after confirming; a same-day
-re-run replaces the comment and skips hour fields (idempotent).
+re-run replaces the comment and skips hour fields (idempotent); comments over the line
+cap (default 25) are rejected — keep `notes` to 2–4 sentences, details go in fields.
+All long-text content is posted as real Markdown; plain fields (title) stay plain.
 
 ## Creating a ticket
 

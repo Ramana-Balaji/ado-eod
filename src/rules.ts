@@ -19,6 +19,8 @@ export interface Rules {
     required: string[];
     template: string;
     signoffTemplate: string;
+    /** eod_post rejects comments longer than this many lines (default 25). */
+    maxLines?: number;
   };
   completion: { maxProposedState: string; requireTester: boolean };
   testScenarioField: Record<string, string>;

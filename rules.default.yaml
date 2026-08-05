@@ -20,22 +20,15 @@ applies: # who / what / where this tool may update
 
 comment: # format + mandatory sections
   format: markdown
+  maxLines: 25 # eod_post rejects longer comments — keep them brief
   # required sections are auto-filled from evidence (commits, sessions, ticket title);
   # only what nothing can derive is asked: summary with zero evidence, testScenarios on completion
   required: [summary, next, testScenarios, description, acceptanceCriteria]
+  # compact by design — comments are a daily log line, not a report
   template: |
     **{{date}} — {{workType}}** ({{hours}}h)
 
     {{summary}}
-
-    | Repo | Change |
-    |---|---|
-    {{#repos}}| {{name}} | {{detail}} |
-    {{/repos}}
-
-    **Issues hit**
-    {{#issues}}- {{.}}
-    {{/issues}}
     {{testScenariosSection}}
     **Next:** {{next}}
   signoffTemplate: | # appended ONLY when completion is proposed

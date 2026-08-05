@@ -1,6 +1,6 @@
 {
   "name": "ado-eod",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "End-of-day Azure DevOps ticket updates and admin rollups, from inside your AI IDE",
   "type": "module",
   "bin": {

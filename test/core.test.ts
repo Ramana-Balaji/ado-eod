@@ -323,3 +323,38 @@ test("SCENARIO_HEADING_RE catches the live-mistake comment shapes", () => {
   assert.equal(SCENARIO_HEADING_RE.test("## Test Senarios\n- a"), true);
   assert.equal(SCENARIO_HEADING_RE.test("ran the test scenarios locally in prose"), false);
 });
+
+test("discovered section fields get the Markdown format op in create ops", () => {
+  // static markdownFields can't know org-custom fields — routing must add them
+  const ops = buildCreateOps("T", "desc", { "Custom.Testsenarios": "- a" }, ["System.Description", "Custom.Testsenarios"]);
+  const paths = ops.map((o: any) => o.path);
+  assert.equal(paths.includes("/fields/Custom.Testsenarios"), true);
+  assert.equal(paths.includes("/multilineFieldsFormat/Custom.Testsenarios"), true);
+  assert.equal(paths.includes("/multilineFieldsFormat/System.Description"), true);
+});
+
+test("default comment template is compact — a typical draft stays well under the line cap", async () => {
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: {
+      format: "markdown", required: [], maxLines: 25,
+      template: "**{{date}} — {{workType}}** ({{hours}}h)\n\n{{summary}}\n{{testScenariosSection}}\n**Next:** {{next}}",
+      signoffTemplate: "",
+    },
+    completion: { maxProposedState: "Resolved", requireTester: false },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({ id, rev: 1, fields: { "System.Title": "T", "System.WorkItemType": "Task", "System.State": "Active", "System.TeamProject": "p" } }),
+    getComments: async () => [],
+    getTypeFields: async () => [],
+  } as any;
+  const evidence: DayEvidence = {
+    date: "2026-08-06", sessions: [],
+    git: [{ repo: "/r/a", branch: "b", commits: ["one", "two", "three", "four", "five", "six"], ticketIds: ["7"], hasSession: true }],
+    redactedLineCount: 0,
+  };
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [7], testScenarios: ["checked x", "checked y"] });
+  const lines = drafts[0].commentMarkdown.split("\n").length;
+  assert.equal(lines <= 12, true, `compact template rendered ${lines} lines`);
+});

@@ -46,9 +46,11 @@ Ticket creation (eod_create): only on explicit request, after showing type+title
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
-Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
+Comments are BRIEF: 2-4 sentence summary + a Next line — the server rejects comments over the line cap (default 25). Detail belongs in fields, not the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
 
-export const server = new McpServer({ name: "ado-eod", version: "0.3.3" }, { instructions: INSTRUCTIONS });
+Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
+
+export const server = new McpServer({ name: "ado-eod", version: "0.3.4" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -210,16 +212,23 @@ server.tool(
           continue;
         }
 
+        // comments are a daily log line, not a report — reject essays
+        const maxLines = rules.comment.maxLines ?? 25;
+        if (u.commentMarkdown.split("\n").length > maxLines) {
+          results.push({ ticketId: u.ticketId, ok: false, error: `comment is ${u.commentMarkdown.split("\n").length} lines — max ${maxLines}. Tighten the summary; details belong in fields, not the comment` });
+          continue;
+        }
+
+        const wiType = wi.fields["System.WorkItemType"];
+        const scenarioF = await resolveSectionField(ado, rules, wiType, "testScenarios");
+        const acF = await resolveSectionField(ado, rules, wiType, "acceptanceCriteria");
+
         // hard rule, seen violated live twice: a comment must not carry a test-scenarios
         // section when the type has a real field for it — that's what eod_draft's
         // testScenarios arg is for
-        if (SCENARIO_HEADING_RE.test(u.commentMarkdown)) {
-          const sf = await resolveSectionField(ado, rules, wi.fields["System.WorkItemType"], "testScenarios");
-          const appendsCoverIt = (u.fieldAppends ?? []).some((fa) => fa.field === sf);
-          if (sf && !appendsCoverIt) {
-            results.push({ ticketId: u.ticketId, ok: false, error: `this comment embeds a Test scenarios section, but this work item type stores them in the "${sf}" field — redraft with eod_draft's testScenarios arg (the server routes them) and confirm again` });
-            continue;
-          }
+        if (SCENARIO_HEADING_RE.test(u.commentMarkdown) && scenarioF && !(u.fieldAppends ?? []).some((fa) => fa.field === scenarioF)) {
+          results.push({ ticketId: u.ticketId, ok: false, error: `this comment embeds a Test scenarios section, but this work item type stores them in the "${scenarioF}" field — redraft with eod_draft's testScenarios arg (the server routes them) and confirm again` });
+          continue;
         }
 
         // idempotency: a same-day marker means UPDATE that comment and skip hour fields
@@ -245,7 +254,9 @@ server.tool(
         }
         for (const [k, v] of Object.entries(u.setFields ?? {})) {
           fields[k] = v;
-          if (rules.fields.markdownFields?.includes(k)) markdownFields.push(k);
+          // every long-text section field is written as real Markdown — including
+          // auto-discovered org fields the static markdownFields list can't know about
+          if (rules.fields.markdownFields?.includes(k) || k === scenarioF || k === acF) markdownFields.push(k);
         }
         if (Object.keys(fields).length) {
           // our own comment just bumped rev — re-read so the PATCH's test op checks
@@ -306,7 +317,9 @@ server.tool(
       extra["System.AssignedTo"] = email;
     }
     if (tags?.length) extra["System.Tags"] = tags.join("; ");
-    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, rules.fields.markdownFields ?? []);
+    // discovered section fields get the Markdown format op too, not just the static list
+    const mdFields = [...new Set([...(rules.fields.markdownFields ?? []), acField, tsField].filter(Boolean) as string[])];
+    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, mdFields);
     return json({
       id: wi.id,
       rev: wi.rev,
