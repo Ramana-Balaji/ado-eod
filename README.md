@@ -65,18 +65,23 @@ claude plugin marketplace add Ramana-Balaji/ado-eod
 claude plugin install ado-eod@ado-eod
 ```
 
-Update later with `claude plugin update ado-eod`. The plugin can't know your Azure
-DevOps org or sign you in, so still run the setup command above once — it detects the
-plugin and leaves Claude Code's own config alone, so the server is never registered
-twice.
+Update later with `claude plugin update ado-eod`. **No npx needed after this**: the
+first time you say "update my ticket", the assistant notices nothing is configured,
+asks you to paste your Azure DevOps address, and saves it itself (`eod_configure`).
+Sign-in opens in your browser on the first Azure DevOps call.
+
+You can still run the setup command above (say, to wire up Cursor or Codex too) — it
+detects the plugin and leaves Claude Code's own config alone, so the server is never
+registered twice.
 
 ### Optional: Cursor plugin
 
 This repo is also a Cursor plugin (Cursor 2.5+): in Cursor, run `/add-plugin` and paste
-`https://github.com/Ramana-Balaji/ado-eod`. You still need `setup` for the org config
-and sign-in — but unlike Claude Code, setup does not yet detect a Cursor plugin install,
-so it will also write the server into `~/.cursor/mcp.json`. Remove that `ado-eod` entry
-afterwards if you use the plugin.
+`https://github.com/Ramana-Balaji/ado-eod`. Same as Claude Code: no `setup` needed —
+first use configures itself in chat via `eod_configure`. If you *do* run setup (for
+other IDEs), note that it does not yet detect a Cursor plugin install and will also
+write the server into `~/.cursor/mcp.json` — remove that `ado-eod` entry if you use the
+plugin.
 
 > No Azure CLI needed. Sign-in is remembered in your OS's secure store (macOS Keychain /
 > Windows credential store / Linux libsecret), so you won't be asked again for months.

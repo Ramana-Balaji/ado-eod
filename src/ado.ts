@@ -39,7 +39,16 @@ export class AdoClient {
         }),
       );
     }
-    const t = await this.credential.getToken(SCOPE);
+    // never hang a tool call on an abandoned browser prompt — fail with instructions instead
+    const t = await Promise.race([
+      this.credential.getToken(SCOPE),
+      new Promise<never>((_, rej) =>
+        setTimeout(
+          () => rej(new Error("browser sign-in not completed within 2 minutes — ask the user to retry and finish the sign-in window, or use `az login` / set ADO_EOD_PAT")),
+          120_000,
+        ).unref(),
+      ),
+    ]);
     return `Bearer ${t.token}`;
   }
 

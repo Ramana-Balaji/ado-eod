@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,6 +55,16 @@ export function expandHome(p: string): string {
   return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
 }
 
+/** Write the machine-local rules file (org + optional project). Shared by CLI setup and eod_configure. */
+export function writeUserRules(org: string, project?: string, dir = join(homedir(), ".ado-eod")): string {
+  const lines = [`# ado-eod machine-local rules`, `ado:`, `  org: ${org}`];
+  if (project) lines.push(`  project: ${project}`);
+  const path = join(dir, "rules.yaml");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path, lines.join("\n") + "\n");
+  return path;
+}
+
 /** Layered load: defaults → org file (optional) → user file. Later wins per top-level key. */
 export function loadRules(): { rules: Rules; sources: Record<string, string>; configErrors: string[] } {
   const layers: Array<{ path: string; label: string }> = [
@@ -87,7 +97,10 @@ export function loadRules(): { rules: Rules; sources: Record<string, string>; co
 /** Soft validation — the server must boot on a fresh machine and point to setup, not crash. */
 function validate(r: Rules): string[] {
   const errors: string[] = [];
-  if (!r.ado?.org) errors.push("ado.org is not set — run: npx ado-eod setup --org <yourorg>");
+  if (!r.ado?.org)
+    errors.push(
+      "ado.org is not set — ask the user for their Azure DevOps address (looks like https://dev.azure.com/<org>/<project>) and call eod_configure with it; or run: npx ado-eod setup",
+    );
   if (!r.ado?.ticketIdPattern) errors.push("ado.ticketIdPattern is required");
   try {
     new RegExp(r.ado?.ticketIdPattern ?? "");

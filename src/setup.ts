@@ -185,10 +185,8 @@ export async function setup(argv: string[] = []): Promise<void> {
   }
 
   if (org) {
-    const lines = [`# ado-eod machine-local rules`, `ado:`, `  org: ${org}`];
-    if (project) lines.push(`  project: ${project}`);
-    mkdirSync(dirname(userRulesPath), { recursive: true });
-    writeFileSync(userRulesPath, lines.join("\n") + "\n");
+    const { writeUserRules } = await import("./rules.js");
+    writeUserRules(org, project);
     console.log(`  ✓ Saved org "${org}"${project ? ` / project "${project}"` : ""} to ${userRulesPath}`);
   } else if (!existsSync(userRulesPath)) {
     console.log("  ! No Azure DevOps organization configured yet.");

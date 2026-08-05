@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { parseAdoInput, upsertMarkerBlock, AG_MARKERS, hasAdoEodPlugin } from "../src/setup.js";
+import { writeUserRules } from "../src/rules.js";
 
 test("upsertMarkerBlock appends once, then replaces — never duplicates on re-run", () => {
   const v1 = upsertMarkerBlock("# my own rules\n", "ado-eod skill v1");
@@ -63,4 +68,14 @@ test("hasAdoEodPlugin: setup skips Claude Code wiring when the plugin owns it", 
   // unreadable / empty registry → wire it rather than silently skipping setup
   assert.equal(hasAdoEodPlugin("not json"), false);
   assert.equal(hasAdoEodPlugin("{}"), false);
+});
+
+test("writeUserRules round-trips through loadRules' YAML layer", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ado-eod-test-"));
+  const path = writeUserRules("contoso", "Contoso Web", dir);
+  const doc = parseYaml(readFileSync(path, "utf8"));
+  assert.deepEqual(doc, { ado: { org: "contoso", project: "Contoso Web" } });
+  // no project → key omitted entirely, not written as empty/undefined
+  const doc2 = parseYaml(readFileSync(writeUserRules("contoso", undefined, dir), "utf8"));
+  assert.deepEqual(doc2, { ado: { org: "contoso" } });
 });

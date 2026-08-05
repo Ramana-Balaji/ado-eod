@@ -1,13 +1,21 @@
 {
   "name": "ado-eod",
   "displayName": "ADO EOD",
-  "version": "0.2.0",
-  "description": "End-of-day Azure DevOps ticket updates from your AI IDE — collect the day's work, draft, confirm, post.",
-  "author": { "name": "Ramana Balaji" },
+  "version": "0.3.0",
+  "description": "End-of-day Azure DevOps ticket updates from your AI IDE \u2014 collect the day's work, draft, confirm, post.",
+  "author": {
+    "name": "Ramana Balaji"
+  },
   "homepage": "https://github.com/Ramana-Balaji/ado-eod",
   "repository": "https://github.com/Ramana-Balaji/ado-eod",
   "license": "MIT",
-  "keywords": ["azure-devops", "mcp", "eod", "worklog", "tickets"],
+  "keywords": [
+    "azure-devops",
+    "mcp",
+    "eod",
+    "worklog",
+    "tickets"
+  ],
   "category": "productivity",
   "skills": "./skills/",
   "mcpServers": "./mcp.json"

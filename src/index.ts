@@ -4,14 +4,17 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadRules } from "./rules.js";
+import { loadRules, writeUserRules } from "./rules.js";
+import { parseAdoInput } from "./setup.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
 import { buildDrafts, EOD_MARKER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
-const { rules, sources, configErrors } = loadRules();
-const ado = new AdoClient(rules);
+// let, not const — eod_configure reloads these in place so a fresh install
+// works in the same chat session without an IDE restart
+let { rules, sources, configErrors } = loadRules();
+let ado = new AdoClient(rules);
 
 /** ADO-touching tools refuse with a pointer to setup instead of a stack trace. */
 function notReady() {
@@ -29,6 +32,8 @@ function json(data: unknown) {
 // The workflow contract travels WITH the server — every MCP client gets it at initialize,
 // even ones setup never wrote a skill file for. The per-IDE SKILL.md is the richer layer.
 const INSTRUCTIONS = `End-of-day Azure DevOps ticket updates. Trigger phrases: "update my ticket", "log my day", or a pasted dev.azure.com work item link.
+
+First run: if any tool reports "not configured", ask the user to paste their Azure DevOps address (https://dev.azure.com/<org>/<project>) and call eod_configure with it — no terminal needed. Sign-in opens in the browser on the first Azure DevOps call.
 
 Daily flow — follow this order:
 1. eod_worklog for the day's evidence.
@@ -74,13 +79,38 @@ server.tool(
 );
 
 server.tool(
+  "eod_configure",
+  "First-run configuration: save the user's Azure DevOps org/project from a pasted dev.azure.com address. Call when any tool reports 'not configured'. Takes effect immediately — no restart. Overwrites ~/.ado-eod/rules.yaml, so only call with an address the user gave in this conversation.",
+  {
+    adoUrl: z.string().describe("What the user pasted — a dev.azure.com/<org>/<project> URL, a <org>.visualstudio.com URL, or just the org name"),
+    project: z.string().optional().describe("Project name, if the user gave it separately"),
+  },
+  async ({ adoUrl, project }) => {
+    const parsed = parseAdoInput(adoUrl);
+    if (!parsed.org)
+      return json({ ok: false, error: `could not find an organization in "${adoUrl}" — ask the user for the address of the page where their tickets live (https://dev.azure.com/<org>/<project>)` });
+    const path = writeUserRules(parsed.org, project ?? parsed.project);
+    ({ rules, sources, configErrors } = loadRules());
+    ado = new AdoClient(rules);
+    return json({
+      ok: true,
+      org: rules.ado.org,
+      project: rules.ado.project || "(not set — eod_report and eod_create need one)",
+      savedTo: path,
+      configErrors,
+      note: "sign-in happens in the browser on the first Azure DevOps call — tell the user to watch for a browser window",
+    });
+  },
+);
+
+server.tool(
   "eod_status",
   "Diagnostics: auth identity, org/project, rules in force and their source files, which IDE histories exist. Run this when anything misbehaves.",
   {},
   async () => {
     let auth: unknown;
     if (!rules.ado.org) {
-      auth = { error: "no org configured — run: npx ado-eod setup --org <yourorg>" };
+      auth = { error: "no org configured — ask the user for their Azure DevOps address and call eod_configure (or they can run: npx ado-eod setup)" };
     } else {
       try {
         auth = await ado.whoAmI();

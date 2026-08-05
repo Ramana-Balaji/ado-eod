@@ -8,6 +8,14 @@ description: End-of-day Azure DevOps ticket update — collects today's work fro
 MCP server `ado-eod` provides all tools. If any tool call fails, run `eod_status` first
 and relay its message — it names the fix (sign-in, rules file, missing history).
 
+## First run (not configured yet)
+
+If a tool reports "not configured": ask the user to paste their Azure DevOps address —
+the page where their tickets live, like `https://dev.azure.com/<org>/<project>` — then
+call `eod_configure` with it. No terminal or restart needed. Sign-in opens in their
+browser on the first Azure DevOps call — tell them to watch for the window. Never guess
+the org; only configure with an address the user gave in this conversation.
+
 ## Daily flow (developer)
 
 1. `eod_worklog` — today's evidence (or `date` if the user names another day). Read it.
