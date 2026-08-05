@@ -4,6 +4,8 @@ import { DayEvidence, SessionRecord, roundAndCapHours } from "./worklog.js";
 
 export interface TicketDraft {
   ticketId: number;
+  /** System.Rev at draft time — eod_post requires it for its concurrent-edit guard. */
+  rev?: number;
   title?: string;
   workItemType?: string;
   error?: string; // populated when the ticket can't be drafted (rules, not found…)
@@ -145,6 +147,7 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
 
 function applyWorkItem(draft: TicketDraft, wi: WorkItem, rules: Rules, callerEmail: string | null): void {
   const f = wi.fields;
+  draft.rev = wi.rev;
   draft.title = f["System.Title"];
   draft.workItemType = f["System.WorkItemType"];
   draft.currentState = f["System.State"];

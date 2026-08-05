@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession } from "../src/worklog.js";
-import { attribute, splitHours, eodMarker, findEodComment, EOD_MARKER_RE } from "../src/draft.js";
+import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
@@ -184,4 +184,26 @@ test("repoHasSession: session editing files in a repo counts even when cwd is el
   // no overlap → git-only; prefix sibling "/…/ado-eod2" must not match via files
   assert.equal(repoHasSession(repo, [{ cwd: "/Users/bcs094/Documents/Symphony", files: ["/Users/bcs094/Documents/ado-eod2/x.ts"] }]), false);
   assert.equal(repoHasSession(repo, [{ cwd: undefined, files: [] }]), false);
+});
+
+test("eod_draft returns rev — eod_post requires it, so a draft without it is unpostable", async () => {
+  // user-reported: drafts came back without System.Rev and every eod_post was blocked
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: { format: "markdown", required: [], template: "{{date}}: {{summary}}", signoffTemplate: "" },
+    completion: { maxProposedState: "Resolved", requireTester: false },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({
+      id, rev: 7,
+      fields: { "System.Title": "T", "System.WorkItemType": "Task", "System.State": "Active", "System.TeamProject": "p" },
+    }),
+    getComments: async () => [],
+  } as any;
+  const evidence: DayEvidence = { date: "2026-08-05", sessions: [], git: [], redactedLineCount: 0 };
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [21637] });
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].rev, 7);
+  assert.equal(drafts[0].error, undefined);
 });
