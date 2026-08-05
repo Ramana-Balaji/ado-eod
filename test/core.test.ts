@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession } from "../src/worklog.js";
+import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
 import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
@@ -244,4 +244,30 @@ test("draft auto-fills summary/next from evidence — never interrogates for dai
   const { drafts: d2 } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42], notes: "Chased the redirect loop." });
   assert.equal(d2[0].commentMarkdown.includes("Chased the redirect loop."), true);
   assert.equal(d2[0].autoFilled.includes("summary"), false);
+});
+
+test("extractTicketIds is case-sensitive and numeric-only — utf-8/iso-8859 are not tickets", () => {
+  const p = rules.ado.ticketIdPattern;
+  assert.deepEqual(extractTicketIds(["saved as utf-8 in /src/iso-8859/x.ts"], p), []);
+  assert.deepEqual(extractTicketIds(["branch ab-123 is lowercase, AB-456 is real"], p), ["456"]);
+  // group-less pattern must not produce NaN-bound ids like "AB-123"; id 0 dropped
+  assert.deepEqual(extractTicketIds(["AB-123"], "AB-\\d+"), []);
+  assert.deepEqual(extractTicketIds(["AB-0 and AB-9"], p), ["9"]);
+});
+
+test("pathsOverlap is segment-aware — sibling dirs never overlap", () => {
+  assert.equal(pathsOverlap("/x/ado-eod-v2", "/x/ado-eod"), false);
+  assert.equal(pathsOverlap("/x/ado-eod/src", "/x/ado-eod"), true);
+  assert.equal(pathsOverlap("/x/ado-eod", "/x/ado-eod"), true);
+  assert.equal(pathsOverlap(undefined, "/x"), false);
+});
+
+test("splitHours: rounded sum never exceeds the day cap", () => {
+  // 6.75h + 7.25h raw = 14.0 (passes raw cap), rounds to 7.0 + 7.5 = 14.5 — must be shaved
+  const s1 = { activeMinutes: 405 } as SessionRecord;
+  const s2 = { activeMinutes: 435 } as SessionRecord;
+  const byTicket = new Map([[1, [s1]], [2, [s2]]]);
+  const out = splitHours(byTicket, rules);
+  const total = [...out.values()].reduce((a, b) => a + b, 0);
+  assert.equal(total <= rules.hours.maxPerDay, true, `total ${total} exceeds cap`);
 });

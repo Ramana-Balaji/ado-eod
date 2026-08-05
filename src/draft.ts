@@ -1,6 +1,6 @@
 import { AdoClient, WorkItem } from "./ado.js";
 import { Rules } from "./rules.js";
-import { DayEvidence, SessionRecord, roundAndCapHours } from "./worklog.js";
+import { DayEvidence, SessionRecord, roundAndCapHours, pathsOverlap } from "./worklog.js";
 
 export interface TicketDraft {
   ticketId: number;
@@ -67,7 +67,7 @@ export function attribute(input: DraftInput): Map<number, SessionRecord[]> {
   for (const g of evidence.git) {
     for (const t of g.ticketIds) {
       const id = Number(t);
-      const related = evidence.sessions.filter((s) => s.cwd && (s.cwd.startsWith(g.repo) || g.repo.startsWith(s.cwd)));
+      const related = evidence.sessions.filter((s) => pathsOverlap(s.cwd, g.repo));
       if (!byTicket.has(id)) byTicket.set(id, []);
       for (const s of related) if (!byTicket.get(id)!.includes(s)) byTicket.get(id)!.push(s);
     }
@@ -106,6 +106,16 @@ export function splitHours(byTicket: Map<number, SessionRecord[]>, rules: Rules)
   const scale = sumH > rules.hours.maxPerDay ? rules.hours.maxPerDay / sumH : 1;
   const out = new Map<number, number>();
   for (const [id, m] of totalMinutes) out.set(id, roundAndCapHours(m * scale, rules));
+  // per-ticket rounding can push the SUM back over the cap (6.75→7.0, 7.25→7.5 = 14.5 on
+  // a 14h day) — shave steps off the largest tickets until the day fits again
+  const step = rules.hours.roundToHours;
+  let total = [...out.values()].reduce((a, b) => a + b, 0);
+  while (total > rules.hours.maxPerDay + 1e-9) {
+    const [bigId] = [...out.entries()].reduce((a, b) => (b[1] > a[1] ? b : a));
+    if ((out.get(bigId) ?? 0) < step) break; // nothing left to shave
+    out.set(bigId, +(out.get(bigId)! - step).toFixed(4));
+    total = +(total - step).toFixed(4);
+  }
   return out;
 }
 
@@ -224,11 +234,7 @@ function autoSummary(draft: TicketDraft, sessions: SessionRecord[], input: Draft
   const commits = [
     ...new Set(
       input.evidence.git
-        .filter(
-          (g) =>
-            g.ticketIds.includes(String(draft.ticketId)) ||
-            sessions.some((s) => s.cwd && (s.cwd.startsWith(g.repo) || g.repo.startsWith(s.cwd))),
-        )
+        .filter((g) => g.ticketIds.includes(String(draft.ticketId)) || sessions.some((s) => pathsOverlap(s.cwd, g.repo)))
         .flatMap((g) => g.commits),
     ),
   ];

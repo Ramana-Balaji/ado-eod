@@ -42,16 +42,17 @@ export function upsertMarkerBlock(existing: string, block: string): string {
   return existing ? `${existing.trimEnd()}\n\n${guarded}\n` : `${guarded}\n`;
 }
 
-function readJson(path: string): any {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
 function writeJsonMerged(path: string, mutate: (doc: any) => void): void {
-  const doc = readJson(path);
+  let doc: any = {};
+  if (existsSync(path)) {
+    // a corrupt config (e.g. ~/.claude.json holds OAuth + trust state) must fail loudly,
+    // not be silently replaced with just our server entry
+    try {
+      doc = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      throw new Error(`${path} exists but is not valid JSON — fix or remove it first`);
+    }
+  }
   mutate(doc);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(doc, null, 2) + "\n");
@@ -59,11 +60,20 @@ function writeJsonMerged(path: string, mutate: (doc: any) => void): void {
 
 /** Accepts "contoso", "https://dev.azure.com/contoso/My%20Project/...", or "contoso.visualstudio.com". */
 export function parseAdoInput(input: string): { org?: string; project?: string } {
-  const s = input.trim().replace(/^https?:\/\//, "");
+  const decode = (p: string) => {
+    // "100%_done" in a pasted project name must not throw URIError out of the tool call
+    try {
+      return decodeURIComponent(p).replace(/\+/g, " ");
+    } catch {
+      return p.replace(/\+/g, " ");
+    }
+  };
+  const s = input.trim().replace(/^https?:\/\//i, "");
   let m = s.match(/^dev\.azure\.com\/([^/\s]+)(?:\/([^/\s?#]+))?/i);
-  if (m) return { org: m[1], project: m[2] ? decodeURIComponent(m[2]).replace(/\+/g, " ") : undefined };
-  m = s.match(/^([^./\s]+)\.visualstudio\.com(?:\/([^/\s?#]+))?/i);
-  if (m) return { org: m[1], project: m[2] ? decodeURIComponent(m[2]).replace(/\+/g, " ") : undefined };
+  if (m) return { org: m[1], project: m[2] ? decode(m[2]) : undefined };
+  // legacy URLs may carry /DefaultCollection/ before the project — it is not the project
+  m = s.match(/^([^./\s]+)\.visualstudio\.com(?:\/DefaultCollection)?(?:\/([^/\s?#]+))?/i);
+  if (m) return { org: m[1], project: m[2] ? decode(m[2]) : undefined };
   if (/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(s)) return { org: s };
   return {};
 }
@@ -112,7 +122,9 @@ const IDES: Ide[] = [
       const path = join(HOME, ".codex", "config.toml");
       const current = existsSync(path) ? readFileSync(path, "utf8") : "";
       if (/^\[mcp_servers\.ado-eod\]/m.test(current)) return "already present in config.toml";
-      const block = `\n[mcp_servers.ado-eod]\ncommand = "${serverCmd.command}"\nargs = [${serverCmd.args.map((a) => `"${a}"`).join(", ")}]\n`;
+      // TOML basic strings treat \ as escape — an unescaped Windows path corrupts the whole file
+      const q = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      const block = `\n[mcp_servers.ado-eod]\ncommand = ${q(serverCmd.command)}\nargs = [${serverCmd.args.map(q).join(", ")}]\n`;
       writeFileSync(path, current + block);
       return "appended to ~/.codex/config.toml";
     },

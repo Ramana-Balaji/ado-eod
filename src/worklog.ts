@@ -111,12 +111,30 @@ export function classifyWorkType(tools: Record<string, number>, files: string[])
 }
 
 export function extractTicketIds(texts: string[], pattern: string): string[] {
-  const re = new RegExp(pattern, "gi");
+  // no forced "i" flag — the default pattern is deliberately uppercase-only, so
+  // "utf-8" or "iso-8859" in a prompt must NOT become ticket ids 8 / 8859
+  const re = new RegExp(pattern, "g");
   const ids = new Set<string>();
   for (const t of texts) {
-    for (const m of t.matchAll(re)) ids.add(m[1] ?? m[0]);
+    for (const m of t.matchAll(re)) {
+      // ids are numeric ADO work item ids downstream — a group-less pattern would
+      // otherwise yield "AB-123" → Number() = NaN and collapse every ticket into one
+      const id = m[1] ?? m[0];
+      if (/^\d+$/.test(id) && +id > 0) ids.add(id);
+    }
   }
   return [...ids];
+}
+
+/** True when one path contains the other (segment-aware — "x/ado-eod-v2" never matches "x/ado-eod"). */
+export function pathsOverlap(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+}
+
+/** Drop mined strings that trip redaction — branch names and titles are user-authored text too. */
+function redactedOut(s: string | undefined, redact: RegExp[]): boolean {
+  return !!s && redact.some((re) => re.test(s));
 }
 
 /** Round hours to nearest step, cap at maxPerDay. */
@@ -139,7 +157,7 @@ async function scanClaudeFile(path: string, range: ReturnType<typeof dayRange>, 
         try {
           const d = JSON.parse(line);
           const s = sessions.get(d.sessionId);
-          if (s) s.title = d.customTitle;
+          if (s && !redactedOut(d.customTitle, redact)) s.title = d.customTitle;
         } catch {}
       }
       continue;
@@ -166,7 +184,7 @@ async function scanClaudeFile(path: string, range: ReturnType<typeof dayRange>, 
     if (ts < s.first) s.first = ts;
     if (ts > s.last) s.last = ts;
     if (d.cwd) s.cwd = d.cwd;
-    if (d.gitBranch && d.gitBranch !== "HEAD" && !s.branches.includes(d.gitBranch)) s.branches.push(d.gitBranch);
+    if (d.gitBranch && d.gitBranch !== "HEAD" && !s.branches.includes(d.gitBranch) && !redactedOut(d.gitBranch, redact)) s.branches.push(d.gitBranch);
     const m = d.message ?? {};
     if (d.type === "user" && typeof m.content === "string") {
       const { text, redacted } = cleanPrompt(m.content, redact);
@@ -178,7 +196,7 @@ async function scanClaudeFile(path: string, range: ReturnType<typeof dayRange>, 
         if (b?.type === "tool_use") {
           s.tools[b.name] = (s.tools[b.name] ?? 0) + 1;
           const fp = b.input?.file_path;
-          if (fp && !s.files.includes(fp)) s.files.push(fp);
+          if (fp && !s.files.includes(fp) && !redactedOut(fp, redact)) s.files.push(fp);
         }
       }
     }
@@ -237,7 +255,7 @@ async function collectCodex(date: string, range: ReturnType<typeof dayRange>, ru
     for (const line of (await readFile(idxPath, "utf8")).split("\n")) {
       try {
         const e = JSON.parse(line);
-        if (e.id) titles.set(e.id, e.thread_name);
+        if (e.id && !redactedOut(e.thread_name, redact)) titles.set(e.id, e.thread_name);
       } catch {}
     }
   }
@@ -266,6 +284,9 @@ async function collectCodex(date: string, range: ReturnType<typeof dayRange>, ru
           s.title = titles.get(id);
         }
       }
+      // a session file can span local midnight — only records inside the day count,
+      // otherwise yesterday's prompts (and their ticket ids) leak into today's draft
+      if (e.timestamp && !inRange(e.timestamp, range)) continue;
       // user messages appear as response_item payloads with role user
       const p = e.payload;
       if (e.type === "response_item" && p?.role === "user") {
@@ -327,6 +348,7 @@ async function collectCursor(range: ReturnType<typeof dayRange>, rules: Rules, r
 async function scanCursorFile(path: string, projSlug: string, range: ReturnType<typeof dayRange>, rules: Rules, redact: RegExp[], counters: { redacted: number }): Promise<SessionRecord | null> {
   let matchesDate = false;
   const prompts: string[] = [];
+  const dayTimestamps: string[] = [];
   const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
   for await (const line of rl) {
     let e: any;
@@ -336,14 +358,24 @@ async function scanCursorFile(path: string, projSlug: string, range: ReturnType<
       continue;
     }
     if (e.role !== "user") continue;
-    const texts = (e.message?.content ?? [])
-      .map((c: any) => c?.text ?? "")
-      .join("\n");
+    // content is an array of blocks OR a bare string — a string must not crash the whole day's collection
+    const c = e.message?.content;
+    const texts = Array.isArray(c) ? c.map((b: any) => b?.text ?? "").join("\n") : String(c ?? "");
     const tsMatch = texts.match(CURSOR_TS_RE);
+    let inDay: boolean | null = null; // null = untagged, can't date this message
     if (tsMatch) {
       const parsed = new Date(tsMatch[1]); // Cursor's tag is local time — parses to the right instant
-      if (!isNaN(+parsed) && parsed.getTime() >= range.startMs && parsed.getTime() < range.endMs) matchesDate = true;
+      if (!isNaN(+parsed)) {
+        inDay = parsed.getTime() >= range.startMs && parsed.getTime() < range.endMs;
+        if (inDay) {
+          matchesDate = true;
+          dayTimestamps.push(parsed.toISOString());
+        }
+      }
     }
+    // a transcript lives for weeks — only messages dated today (or undatable ones) belong
+    // in today's evidence, else last week's ticket ids get today's hours
+    if (inDay === false) continue;
     const { text, redacted } = cleanPrompt(texts.replace(CURSOR_TS_RE, ""), redact);
     counters.redacted += redacted;
     if (text) prompts.push(text.slice(0, 500));
@@ -353,8 +385,9 @@ async function scanCursorFile(path: string, projSlug: string, range: ReturnType<
     source: "cursor", sessionId: basename(path, ".jsonl"),
     // the slug is a lossy path encoding and platform-specific — keep it as a label, not a path
     cwd: undefined, title: projSlug,
-    branches: [], first: new Date(range.startMs).toISOString(), last: new Date(range.startMs).toISOString(),
-    activeMinutes: 0, precision: "coarse",
+    branches: [], first: dayTimestamps[0] ?? new Date(range.startMs).toISOString(), last: dayTimestamps[dayTimestamps.length - 1] ?? new Date(range.startMs).toISOString(),
+    // hours from the message timestamps we do have — 0 silently undercounted the whole session
+    activeMinutes: activeMinutes(dayTimestamps, rules.hours.idleGapMinutes), precision: "coarse",
     prompts, tools: {}, files: [], ticketIds: [], workType: "implementation",
   };
   s.ticketIds = extractTicketIds(prompts, rules.ado.ticketIdPattern);
@@ -374,11 +407,7 @@ function git(repo: string, args: string[]): string {
 // a session covers a repo if its cwd overlaps the repo path OR it edited files inside it
 // (sessions routinely edit across repos — cwd alone misses that)
 export function repoHasSession(repo: string, sessions: Pick<SessionRecord, "cwd" | "files">[]): boolean {
-  return sessions.some(
-    (s) =>
-      (!!s.cwd && (s.cwd.startsWith(repo) || repo.startsWith(s.cwd))) ||
-      s.files.some((f) => f.startsWith(repo + "/")),
-  );
+  return sessions.some((s) => pathsOverlap(s.cwd, repo) || s.files.some((f) => f.startsWith(repo + "/")));
 }
 
 export function collectGit(date: string, rules: Rules, sessions: Pick<SessionRecord, "cwd" | "files">[], redact: RegExp[] = []): GitEvidence[] {
@@ -402,7 +431,8 @@ export function collectGit(date: string, rules: Rules, sessions: Pick<SessionRec
     if (email) logArgs.push(`--author=${email}`);
     // commit subjects are mined text, same as prompts — redact before they can reach a comment
     const commits = git(repo, logArgs).split("\n").filter(Boolean).filter((c) => !redact.some((re) => re.test(c)));
-    const branch = git(repo, ["branch", "--show-current"]);
+    let branch = git(repo, ["branch", "--show-current"]);
+    if (redact.some((re) => re.test(branch))) branch = "";
     if (!commits.length) continue;
     const ticketIds = extractTicketIds([...commits, branch], rules.ado.ticketIdPattern);
     const hasSession = repoHasSession(repo, sessions);

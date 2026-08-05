@@ -79,3 +79,25 @@ test("writeUserRules round-trips through loadRules' YAML layer", () => {
   const doc2 = parseYaml(readFileSync(writeUserRules("contoso", undefined, dir), "utf8"));
   assert.deepEqual(doc2, { ado: { org: "contoso" } });
 });
+
+test("parseAdoInput hardening: bad percent-encoding, DefaultCollection, uppercase scheme", () => {
+  // must not throw URIError
+  assert.deepEqual(parseAdoInput("https://dev.azure.com/contoso/100%_done"), { org: "contoso", project: "100%_done" });
+  // legacy collection segment is not the project
+  assert.deepEqual(parseAdoInput("https://contoso.visualstudio.com/DefaultCollection/MyProj"), { org: "contoso", project: "MyProj" });
+  assert.deepEqual(parseAdoInput("HTTPS://dev.azure.com/contoso/MyProj"), { org: "contoso", project: "MyProj" });
+});
+
+test("writeUserRules survives hostile project names — file always parses back to strings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ado-eod-yaml-"));
+  for (const project of ["A: B", "#team", "true", "123", "x\ny", "- list"]) {
+    const doc = parseYaml(readFileSync(writeUserRules("contoso", project, dir), "utf8"));
+    assert.deepEqual(doc, { ado: { org: "contoso", project } }, `project ${JSON.stringify(project)} did not round-trip`);
+  }
+});
+
+test("loadRules-style merge guard: writeUserRules never emits a bare null key", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ado-eod-null-"));
+  const doc = parseYaml(readFileSync(writeUserRules("contoso", undefined, dir), "utf8"));
+  assert.deepEqual(doc, { ado: { org: "contoso" } });
+});

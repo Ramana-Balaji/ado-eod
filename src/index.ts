@@ -48,7 +48,7 @@ Admin questions ("how did <project> go this week", "what has <person> been worki
 
 Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.3.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.3.1" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -190,10 +190,25 @@ server.tool(
           continue;
         }
 
+        // the marker is what makes re-runs idempotent — a draft that lost it must not post,
+        // or every retry would add a fresh comment and re-count the hours
+        const markerDate = u.commentMarkdown.match(EOD_MARKER_RE)?.[1];
+        if (!markerDate) {
+          results.push({ ticketId: u.ticketId, ok: false, error: "commentMarkdown is missing its `eod:` marker — post the draft's comment unmodified (edits are fine, the marker line must stay)" });
+          continue;
+        }
+
+        // concurrent-edit guard BEFORE we write anything: posting our own comment bumps
+        // rev, so testing the draft-time rev inside the field PATCH would always fail
+        const wi = await ado.getWorkItem(u.ticketId);
+        if (wi.rev !== u.rev) {
+          results.push({ ticketId: u.ticketId, ok: false, error: `ticket changed since draft (rev ${u.rev} → ${wi.rev}) — redraft with eod_draft and confirm again` });
+          continue;
+        }
+
         // idempotency: a same-day marker means UPDATE that comment and skip hour fields
         const comments = await ado.getComments(u.ticketId);
-        const markerDate = u.commentMarkdown.match(EOD_MARKER_RE)?.[1];
-        const dup = markerDate ? findEodComment(comments, markerDate) : undefined;
+        const dup = findEodComment(comments, markerDate);
         const skipHours = Boolean(dup);
 
         if (dup) await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format);
@@ -207,8 +222,7 @@ server.tool(
           fields["Microsoft.VSTS.Scheduling.RemainingWork"] = u.remainingWork;
         if (rules.fields.state && u.state) fields["System.State"] = u.state;
         for (const fa of u.fieldAppends ?? []) {
-          // read-then-append, never overwrite
-          const wi = await ado.getWorkItem(u.ticketId);
+          // read-then-append, never overwrite (current values from the pre-check read)
           const current = wi.fields[fa.field] ?? "";
           fields[fa.field] = current ? `${current}\n\n---\n\n${fa.markdown}` : fa.markdown;
           markdownFields.push(fa.field);
@@ -217,7 +231,12 @@ server.tool(
           fields[k] = v;
           if (rules.fields.markdownFields?.includes(k)) markdownFields.push(k);
         }
-        if (Object.keys(fields).length) await ado.updateWorkItem(u.ticketId, u.rev, fields, markdownFields);
+        if (Object.keys(fields).length) {
+          // our own comment just bumped rev — re-read so the PATCH's test op checks
+          // against reality; the pre-check above already caught third-party edits
+          const fresh = await ado.getWorkItem(u.ticketId);
+          await ado.updateWorkItem(u.ticketId, fresh.rev, fields, markdownFields);
+        }
         results.push({ ticketId: u.ticketId, ok: true, skippedHours: skipHours });
       } catch (e: any) {
         results.push({ ticketId: u.ticketId, ok: false, error: e.message?.slice(0, 400) ?? String(e) });
@@ -248,7 +267,12 @@ server.tool(
     const blocked = notReady();
     if (blocked) return blocked;
     const extra: Record<string, any> = { ...(extraFields ?? {}) };
-    if (assignToSelf) extra["System.AssignedTo"] = (await ado.whoAmI()).email;
+    if (assignToSelf) {
+      const email = (await ado.whoAmI()).email;
+      // some identity providers omit the account property — "?" would hit ADO as a literal assignee
+      if (!email || email === "?") return json({ error: "could not resolve your identity for assignToSelf — create without it or pass System.AssignedTo in fields" });
+      extra["System.AssignedTo"] = email;
+    }
     if (tags?.length) extra["System.Tags"] = tags.join("; ");
     const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, rules.fields.markdownFields ?? []);
     return json({

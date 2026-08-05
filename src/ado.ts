@@ -40,8 +40,12 @@ export class AdoClient {
       );
     }
     // never hang a tool call on an abandoned browser prompt — fail with instructions instead
+    const pending = this.credential.getToken(SCOPE);
+    // if the timeout wins, this orphaned promise may still reject later — an unhandled
+    // rejection would kill the whole MCP server process
+    pending.catch(() => {});
     const t = await Promise.race([
-      this.credential.getToken(SCOPE),
+      pending,
       new Promise<never>((_, rej) =>
         setTimeout(
           () => rej(new Error("browser sign-in not completed within 2 minutes — ask the user to retry and finish the sign-in window, or use `az login` / set ADO_EOD_PAT")),
@@ -61,7 +65,9 @@ export class AdoClient {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`ADO ${method} ${url} → ${res.status}: ${text.slice(0, 400)}`);
+      const err: any = new Error(`ADO ${method} ${url} → ${res.status}: ${text.slice(0, 400)}`);
+      err.status = res.status; // callers distinguish "param rejected" (4xx) from transient failures
+      throw err;
     }
     return res.status === 204 ? null : res.json();
   }
@@ -84,21 +90,39 @@ export class AdoClient {
   }
 
   async getComments(id: number): Promise<Array<{ id: number; text: string; createdBy: string; createdDate: string }>> {
-    const r = await this.req("GET", `${this.baseProject}/_apis/wit/workItems/${id}/comments?api-version=${API}-preview.4`);
-    return (r.comments ?? []).map((c: any) => ({
+    // paginated, oldest first — the day's marker comment is exactly what falls off page 1
+    // on long-lived tickets, which would break idempotency (duplicate comments, double hours)
+    const all: any[] = [];
+    let token: string | undefined;
+    for (let page = 0; page < 50; page++) {
+      const tk = token ? `&continuationToken=${encodeURIComponent(token)}` : "";
+      const r = await this.req("GET", `${this.baseProject}/_apis/wit/workItems/${id}/comments?$top=200${tk}&api-version=${API}-preview.4`);
+      all.push(...(r.comments ?? []));
+      token = r.continuationToken;
+      if (!token) break;
+    }
+    return all.map((c: any) => ({
       id: c.id, text: c.text ?? "",
       createdBy: c.createdBy?.displayName ?? "?", createdDate: c.createdDate,
     }));
   }
 
   async wiql(query: string): Promise<number[]> {
-    const r = await this.req("POST", `${this.baseProject}/_apis/wit/wiql?api-version=${API}`, { query });
+    // org-scoped, not project-scoped: report queries name their own project in WHERE —
+    // a project-scoped endpoint silently returns nothing for any other project
+    const r = await this.req("POST", `${this.base}/_apis/wit/wiql?api-version=${API}`, { query });
     return (r.workItems ?? []).map((w: any) => w.id);
   }
 
   async getRevisions(id: number): Promise<Array<{ rev: number; changedBy: string; changedDate: string; state?: string }>> {
-    const r = await this.req("GET", `${this.base}/_apis/wit/workitems/${id}/revisions?api-version=${API}`);
-    return (r.value ?? []).map((v: any) => ({
+    // page through — busy items exceed the 200-per-page default and would lose newest history
+    const value: any[] = [];
+    for (let skip = 0; skip < 10_000; skip += 200) {
+      const r = await this.req("GET", `${this.base}/_apis/wit/workitems/${id}/revisions?$top=200&$skip=${skip}&api-version=${API}`);
+      value.push(...(r.value ?? []));
+      if ((r.value ?? []).length < 200) break;
+    }
+    return value.map((v: any) => ({
       rev: v.rev,
       changedBy: v.fields?.["System.ChangedBy"]?.displayName ?? v.fields?.["System.ChangedBy"] ?? "?",
       changedDate: v.fields?.["System.ChangedDate"],
@@ -136,9 +160,13 @@ export class AdoClient {
 
   // ---------- Phase 1b: writes (gated by eod_post's confirmed flag upstream) ----------
 
+  /** The markdown `format` param is rejected by older orgs with a 4xx — ONLY that means "unsupported". */
+  private static formatRejected(e: any): boolean {
+    return typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403 && e.status !== 429;
+  }
+
   async addComment(id: number, text: string, format: "markdown" | "html"): Promise<void> {
     if (format === "markdown") {
-      // format param is newer than the 7.0 API surface; fall back to HTML if the org rejects it
       try {
         await this.req(
           "POST",
@@ -147,7 +175,10 @@ export class AdoClient {
         );
         this.commentsMarkdownSupported = true;
         return;
-      } catch {
+      } catch (e) {
+        // a transient 500 / network drop must NOT flag markdown unsupported forever,
+        // and must not re-POST (the first request may have committed → duplicate comment)
+        if (!AdoClient.formatRejected(e)) throw e;
         this.commentsMarkdownSupported = false;
       }
     }
@@ -163,8 +194,10 @@ export class AdoClient {
         `${this.baseProject}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4${fmt}`,
         { text },
       );
-    } catch {
-      // format param rejected by older orgs — retry plain
+    } catch (e) {
+      // only a rejected format param falls back to plain — surfacing the real error beats
+      // storing markdown as HTML on a transient failure
+      if (!fmt || !AdoClient.formatRejected(e)) throw e;
       await this.req(
         "PATCH",
         `${this.baseProject}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4`,

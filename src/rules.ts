@@ -2,7 +2,7 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "yaml";
+import { parse, stringify } from "yaml";
 
 export interface Rules {
   version: number;
@@ -57,11 +57,12 @@ export function expandHome(p: string): string {
 
 /** Write the machine-local rules file (org + optional project). Shared by CLI setup and eod_configure. */
 export function writeUserRules(org: string, project?: string, dir = join(homedir(), ".ado-eod")): string {
-  const lines = [`# ado-eod machine-local rules`, `ado:`, `  org: ${org}`];
-  if (project) lines.push(`  project: ${project}`);
+  // stringify, never concatenate — a project like "A: B" or "#team" written raw makes
+  // the file unparseable (or silently null) and the server refuses to boot
+  const body = stringify({ ado: { org: String(org), ...(project ? { project: String(project) } : {}) } });
   const path = join(dir, "rules.yaml");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path, lines.join("\n") + "\n");
+  writeFileSync(path, `# ado-eod machine-local rules\n${body}`);
   return path;
 }
 
@@ -74,11 +75,20 @@ export function loadRules(): { rules: Rules; sources: Record<string, string>; co
   ];
   let merged: Record<string, unknown> = {};
   const sources: Record<string, string> = {};
+  const loadErrors: string[] = [];
   for (const { path, label } of layers) {
     if (!existsSync(path)) continue;
-    const doc = parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    let doc: Record<string, unknown>;
+    try {
+      doc = parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    } catch (e: any) {
+      // the server must boot and point at the broken file, not crash at import time
+      loadErrors.push(`${label} rules file is invalid YAML — fix or delete it: ${path} (${e.message?.split("\n")[0]})`);
+      continue;
+    }
     if (!doc || typeof doc !== "object") continue;
     for (const [k, v] of Object.entries(doc)) {
+      if (v == null) continue; // a bare "ado:" key must not null out the defaults
       // one-level-deep merge: a user file setting only ado.org must not wipe
       // ado.ticketIdPattern from the defaults
       const prev = merged[k];
@@ -91,7 +101,7 @@ export function loadRules(): { rules: Rules; sources: Record<string, string>; co
     }
   }
   const rules = merged as unknown as Rules;
-  return { rules, sources, configErrors: validate(rules) };
+  return { rules, sources, configErrors: [...loadErrors, ...validate(rules)] };
 }
 
 /** Soft validation — the server must boot on a fresh machine and point to setup, not crash. */
@@ -103,7 +113,10 @@ function validate(r: Rules): string[] {
     );
   if (!r.ado?.ticketIdPattern) errors.push("ado.ticketIdPattern is required");
   try {
-    new RegExp(r.ado?.ticketIdPattern ?? "");
+    const re = new RegExp((r.ado?.ticketIdPattern ?? "") + "|");
+    // exec("") match array length = capture groups + 1 — extraction needs group 1 for the numeric id
+    if ((re.exec("")?.length ?? 1) < 2)
+      errors.push(`ado.ticketIdPattern needs a capture group around the numeric id, e.g. '[A-Z]{2,5}-(\\d+)': ${r.ado.ticketIdPattern}`);
   } catch {
     errors.push(`ado.ticketIdPattern is not a valid regex: ${r.ado.ticketIdPattern}`);
   }
