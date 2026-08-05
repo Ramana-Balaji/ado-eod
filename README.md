@@ -19,45 +19,15 @@ re-typing. You review a draft and say "yes". That's the whole workflow.
 
 ## Setup (once, ~2 minutes)
 
-You need [Node.js 20+](https://nodejs.org).
-
-### Claude Code — install as a plugin (recommended)
-
-```bash
-claude plugin marketplace add Ramana-Balaji/ado-eod
-claude plugin install ado-eod@ado-eod
-```
-
-That gives Claude Code the MCP server **and** the skill in one versioned unit — update
-later with `claude plugin update ado-eod`.
-
-The plugin does not know your Azure DevOps org, and it can't sign you in — so run setup
-once as well:
+You need [Node.js 20+](https://nodejs.org). Then open any terminal (the one inside
+VS Code is fine) and run **one command**:
 
 ```bash
 npx github:Ramana-Balaji/ado-eod setup
 ```
 
-It asks one question — paste your Azure DevOps address (the page where your tickets
-live) — then signs you in and wires up any *other* IDEs you have. It detects the plugin
-and leaves Claude Code's own config alone, so the server is never registered twice.
-
-Then restart Claude Code.
-
-### Cursor — install as a plugin (recommended)
-
-This repo is also a Cursor plugin (Cursor 2.5+): in Cursor, run `/add-plugin` and paste
-`https://github.com/Ramana-Balaji/ado-eod`. That installs the MCP server and the skill
-together. You still need `setup` for the org config and sign-in — but unlike Claude
-Code, setup does not yet detect a Cursor plugin install, so it will also write the
-server into `~/.cursor/mcp.json`. Remove that `ado-eod` entry afterwards if you use the
-plugin.
-
-### Other IDEs (Codex, Antigravity) — one command
-
-```bash
-npx github:Ramana-Balaji/ado-eod setup
-```
+> The first run builds the tool and takes a minute or two before printing anything —
+> that's normal.
 
 It asks one question — **paste your Azure DevOps address** (the page where your tickets
 are; it looks like `https://dev.azure.com/<your-org>/<your-project>`) — and figures out
@@ -69,21 +39,68 @@ npx github:Ramana-Balaji/ado-eod setup --org <your-org> --project "<your project
 ```
 
 That one command:
-1. finds which supported IDEs you have installed and wires each of them up,
+1. finds which supported IDEs you have installed and wires each of them up
+   (Claude Code, Codex, Cursor, Antigravity),
 2. opens your browser once to sign in with your normal work account (Microsoft Entra —
    no tokens to create or paste),
 3. confirms everything works and tells you what to try.
 
-Restart your IDE afterwards. Done.
+Restart your IDE afterwards. Done — jump to [First prompts to try](#first-prompts-to-try).
+
+This works for **every** way of running Claude Code — the desktop app, the VS Code
+extension, and the terminal CLI all read the same config (`~/.claude.json` and
+`~/.claude/skills/`), and setup writes it directly. You do **not** need the `claude`
+command in your terminal.
 
 Setup installs two things per IDE: the **MCP server** (the six tools) and the **skill**
 that teaches your assistant how to use them — see [The skill](#the-skill).
+
+### Optional: install as a plugin instead (Claude Code CLI users)
+
+If you *do* use the `claude` CLI in a terminal, you can take the server + skill as a
+versioned plugin instead of letting setup wire them:
+
+```bash
+claude plugin marketplace add Ramana-Balaji/ado-eod
+claude plugin install ado-eod@ado-eod
+```
+
+Update later with `claude plugin update ado-eod`. The plugin can't know your Azure
+DevOps org or sign you in, so still run the setup command above once — it detects the
+plugin and leaves Claude Code's own config alone, so the server is never registered
+twice.
+
+### Optional: Cursor plugin
+
+This repo is also a Cursor plugin (Cursor 2.5+): in Cursor, run `/add-plugin` and paste
+`https://github.com/Ramana-Balaji/ado-eod`. You still need `setup` for the org config
+and sign-in — but unlike Claude Code, setup does not yet detect a Cursor plugin install,
+so it will also write the server into `~/.cursor/mcp.json`. Remove that `ado-eod` entry
+afterwards if you use the plugin.
 
 > No Azure CLI needed. Sign-in is remembered in your OS's secure store (macOS Keychain /
 > Windows credential store / Linux libsecret), so you won't be asked again for months.
 > If your machine can't use the secure store, set `ADO_EOD_PAT` to a
 > [personal access token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate)
 > as a fallback.
+
+## First prompts to try
+
+All of these go straight into your IDE's chat — no commands to learn. Right after setup,
+start with the safe ones:
+
+| Try saying | What happens | Writes anything? |
+|---|---|---|
+| `is ado-eod working?` | runs diagnostics — shows who you're signed in as, your org/project, which IDE histories it can see | no |
+| `what did I work on today?` | shows the day's evidence: sessions, prompts, repos, commits | no |
+| `update my ticket for today` | drafts the full ticket update and shows it — posts only after you say yes | only after your yes |
+| `update ticket 12345 with today's work` | same, for a specific ticket | only after your yes |
+| `log my day — spent most of it on the login bug, still not done` | your one-sentence summary becomes part of the draft | only after your yes |
+| `this is done, tested with Alex — update the ticket` | draft includes the completion sign-off @-mentioning Alex | only after your yes |
+| `create a ticket for the caching bug we just found` | shows type + title + description, creates after you confirm | only after your yes |
+
+Nothing writes to Azure DevOps until you've seen the exact draft and said yes — so feel
+free to run `update my ticket for today` just to see what it produces.
 
 ## Daily use
 
