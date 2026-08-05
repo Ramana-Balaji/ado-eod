@@ -120,8 +120,11 @@ exactly what will be written:
 - hours: `Completed 4.5h → 7.0h · 43% → 67% done` — cumulative, never overwritten
 - a state change when appropriate
 
-Nothing is posted until you say yes. If the evidence can't fill a required section, it
-asks you instead of inventing.
+Every section is pre-filled from your actual evidence — commit messages, sessions,
+files touched, the ticket's own title. You're never quizzed section by section: the
+draft appears first, you edit anything that's off, and nothing is posted until you say
+yes. The only questions you'll ever get are the ones evidence can't answer — who tested
+it, when you say the work is complete.
 
 When your work is **complete**, say who tested it:
 

@@ -37,10 +37,10 @@ First run: if any tool reports "not configured", ask the user to paste their Azu
 
 Daily flow — follow this order:
 1. eod_worklog for the day's evidence.
-2. eod_draft (tickets the user named; a 2-4 sentence factual "notes" summary from the live conversation; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested).
-3. Show the full draft in chat: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions.
-4. If missingSections is non-empty, ask the user for exactly those items and redraft. Never invent content for a required section.
-5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown. Never post unreviewed.
+2. eod_draft (tickets the user named; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested).
+3. Show the full draft in chat IMMEDIATELY — no questions first: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions. Sections in autoFilled were generated from evidence — the user edits if needed.
+4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
+5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
 
 Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. Put acceptance criteria / test scenarios / tester into the org's dedicated fields (mappings in ~/.ado-eod/rules.yaml) via the "fields"/"setFields" args — not into one giant Description.
 
@@ -48,7 +48,7 @@ Admin questions ("how did <project> go this week", "what has <person> been worki
 
 Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.1.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.3.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -59,7 +59,7 @@ server.tool(
 
 server.tool(
   "eod_draft",
-  "Build per-ticket EOD drafts: comment markdown, cumulative hours with % complete, proposed state, field appends. Reads ADO, writes NOTHING. Show the result to the user; missingSections must be filled (via notes or user answers) before eod_post.",
+  "Build per-ticket EOD drafts: comment markdown, cumulative hours with % complete, proposed state, field appends. Reads ADO, writes NOTHING. Sections are auto-filled from evidence (autoFilled lists them) — show the draft immediately; only ask the user about missingSections entries (rare).",
   {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     tickets: z.array(z.number()).optional().describe("Explicit work item ids from the user's message"),

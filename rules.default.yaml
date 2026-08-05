@@ -20,6 +20,8 @@ applies: # who / what / where this tool may update
 
 comment: # format + mandatory sections
   format: markdown
+  # required sections are auto-filled from evidence (commits, sessions, ticket title);
+  # only what nothing can derive is asked: summary with zero evidence, testScenarios on completion
   required: [summary, next, testScenarios, description, acceptanceCriteria]
   template: |
     **{{date}} — {{workType}}** ({{hours}}h)

@@ -22,7 +22,8 @@ export interface TicketDraft {
   proposedState?: string | null;
   allowedStates?: string[];
   commentMarkdown: string;
-  missingSections: string[]; // required sections the evidence couldn't fill → ask user
+  missingSections: string[]; // sections nothing can fill (e.g. tester on completion) → ask user
+  autoFilled: string[]; // sections generated from evidence — show them; the user edits if needed
   fieldAppends: Array<{ field: string; markdown: string }>;
   setFields?: Record<string, any>; // direct sets, e.g. the tester identity field
   signoff?: { tester: string; resolved: boolean; displayName?: string; identityId?: string };
@@ -121,6 +122,7 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
       hours: hoursByTicket.get(ticketId) ?? 0,
       commentMarkdown: "",
       missingSections: [],
+      autoFilled: [],
       fieldAppends: [],
     };
     try {
@@ -217,6 +219,27 @@ function render(template: string, vars: Record<string, string | string[] | Array
   return out;
 }
 
+/** Factual summary from the day's own evidence — commit subjects first, session shape as fallback. */
+function autoSummary(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput): string {
+  const commits = [
+    ...new Set(
+      input.evidence.git
+        .filter(
+          (g) =>
+            g.ticketIds.includes(String(draft.ticketId)) ||
+            sessions.some((s) => s.cwd && (s.cwd.startsWith(g.repo) || g.repo.startsWith(s.cwd))),
+        )
+        .flatMap((g) => g.commits),
+    ),
+  ];
+  const files = new Set(sessions.flatMap((s) => s.files)).size;
+  const parts: string[] = [];
+  if (commits.length) parts.push(`Commits: ${commits.slice(0, 5).join("; ")}${commits.length > 5 ? ` (+${commits.length - 5} more)` : ""}.`);
+  if (sessions.length) parts.push(`${sessions.length} working session${sessions.length > 1 ? "s" : ""}, ${files} file${files === 1 ? "" : "s"} touched.`);
+  if (!parts.length && draft.title) parts.push(`Worked on: ${draft.title}.`);
+  return parts.join(" ");
+}
+
 function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput, rules: Rules): void {
   const workTypes = [...new Set(sessions.map((s) => s.workType))];
   const repoRows = [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].map((cwd) => ({
@@ -224,27 +247,36 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
     detail: `${sessions.filter((s) => s.cwd === cwd).flatMap((s) => s.files).length} files`,
   }));
 
-  // What the evidence alone can fill; summary/issues/next/testScenarios come from `notes`
-  // (the live conversation) — the assistant fills them, we only validate.
+  // Every section is filled from evidence (notes from the live conversation win when
+  // given). The user edits the shown draft — they are never interrogated section by
+  // section. autoFilled records what was generated so the assistant can point at it.
+  let summary = input.notes ?? "";
+  if (!summary) {
+    summary = autoSummary(draft, sessions, input);
+    if (summary) draft.autoFilled.push("summary");
+  }
+  const next = draft.proposedState
+    ? "None — work complete, pending tester sign-off."
+    : `Continue: ${draft.title ?? "current work"}.`;
+  draft.autoFilled.push("next");
+
   const vars: Record<string, any> = {
     date: input.evidence.date,
     workType: workTypes.join("+") || "implementation",
     hours: String(draft.hours),
-    summary: input.notes ?? "",
+    summary,
     repos: repoRows,
     issues: [],
     testScenarios: [],
-    next: "",
+    next,
   };
 
+  // Only what nothing can derive is still flagged: a summary with zero evidence, and
+  // test scenarios when completion is proposed (the sign-off needs real ones).
   for (const section of rules.comment.required) {
-    if (section === "summary" && !vars.summary) draft.missingSections.push("summary");
-    if (section === "next" && !vars.next) draft.missingSections.push("next");
-    if (section === "testScenarios" && !vars.testScenarios.length) draft.missingSections.push("testScenarios");
-    if (section === "description" || section === "acceptanceCriteria") {
-      // required as field appends too; flagged for the assistant to supply
-      draft.missingSections.push(section);
-    }
+    if (section === "summary" && !vars.summary) draft.missingSections.push("summary (no evidence found for this ticket today)");
+    if (section === "testScenarios" && draft.proposedState && !vars.testScenarios.length)
+      draft.missingSections.push("testScenarios (completion proposed — how was this verified?)");
   }
 
   let body = render(rules.comment.template, vars);

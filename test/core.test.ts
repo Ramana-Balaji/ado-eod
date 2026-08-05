@@ -207,3 +207,41 @@ test("eod_draft returns rev — eod_post requires it, so a draft without it is u
   assert.equal(drafts[0].rev, 7);
   assert.equal(drafts[0].error, undefined);
 });
+
+test("draft auto-fills summary/next from evidence — never interrogates for daily updates", async () => {
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: {
+      format: "markdown",
+      required: ["summary", "next", "testScenarios", "description", "acceptanceCriteria"],
+      template: "{{summary}}\n\nNext: {{next}}",
+      signoffTemplate: "",
+    },
+    completion: { maxProposedState: "Resolved", requireTester: true },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({
+      id, rev: 3,
+      fields: { "System.Title": "Fix login redirect", "System.WorkItemType": "Bug", "System.State": "Active", "System.TeamProject": "p" },
+    }),
+    getComments: async () => [],
+  } as any;
+  const evidence: DayEvidence = {
+    date: "2026-08-05",
+    sessions: [],
+    git: [{ repo: "/r/app", branch: "AB-42-login", commits: ["fix redirect loop", "add regression test"], ticketIds: ["42"], hasSession: true }],
+    redactedLineCount: 0,
+  };
+  // no notes passed — the server must fill everything itself
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42] });
+  const d = drafts[0];
+  assert.equal(d.missingSections.length, 0, `no questions for a daily update, got: ${d.missingSections}`);
+  assert.equal(d.commentMarkdown.includes("fix redirect loop"), true);
+  assert.equal(d.commentMarkdown.includes("Continue: Fix login redirect."), true);
+  assert.deepEqual(d.autoFilled, ["summary", "next"]);
+  // explicit notes win over the auto summary
+  const { drafts: d2 } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42], notes: "Chased the redirect loop." });
+  assert.equal(d2[0].commentMarkdown.includes("Chased the redirect loop."), true);
+  assert.equal(d2[0].autoFilled.includes("summary"), false);
+});

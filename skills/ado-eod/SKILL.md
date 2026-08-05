@@ -21,16 +21,19 @@ the org; only configure with an address the user gave in this conversation.
 1. `eod_worklog` — today's evidence (or `date` if the user names another day). Read it.
 2. `eod_draft` with:
    - `tickets`: any work item ids/links the user mentioned (extract the number)
-   - `notes`: 2–4 sentence summary of what was actually done, written from the live
-     conversation and the worklog evidence. Factual, no fluff.
+   - `notes`: 2–4 sentence summary of what was actually done — **write it yourself**
+     from the worklog evidence (prompts, files, commits) and the live conversation.
+     Factual, no fluff. Do NOT ask the user what they did; the evidence answers that.
    - `completion`: ONLY if the user said the work is complete. Include `tester` if they
      named who tested it ("tested with alex"). Never infer completion.
-3. **Show the draft in chat** — per ticket: the comment markdown, `Completed Xh → Yh · N% → M% done`,
-   proposed state, field appends and set-fields. List unattributed sessions and git-only repos too.
-4. `missingSections` non-empty → ask the user for exactly those items, then redraft.
-   Never invent content for a required section.
-5. Wait for an explicit yes. Then `eod_post` with `confirmed: true` and the exact values
-   the user saw. Report the per-ticket results.
+3. **Show the draft in chat immediately — no questions first** — per ticket: the comment
+   markdown, `Completed Xh → Yh · N% → M% done`, proposed state, field appends and
+   set-fields. List unattributed sessions and git-only repos too. Sections listed in
+   `autoFilled` were generated from evidence; say so, the user edits if needed.
+4. Ask ONLY for what `missingSections` lists — rare: the tester on completion, or a
+   ticket with zero evidence today. Everything else ships as drafted.
+5. Wait for an explicit yes (with any edits applied). Then `eod_post` with
+   `confirmed: true` and the exact values the user saw. Report the per-ticket results.
 
 Rules (enforced by the server, don't fight them): hours are cumulative and capped per
 day; the tool never proposes Closed — the tester closes after confirming; a same-day
