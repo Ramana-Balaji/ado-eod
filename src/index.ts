@@ -8,7 +8,7 @@ import { loadRules, writeUserRules } from "./rules.js";
 import { parseAdoInput } from "./setup.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, EOD_MARKER_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, EOD_MARKER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -37,18 +37,18 @@ First run: if any tool reports "not configured", ask the user to paste their Azu
 
 Daily flow — follow this order:
 1. eod_worklog for the day's evidence.
-2. eod_draft (tickets the user named; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested).
+2. eod_draft (tickets the user named; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
 3. Show the full draft in chat IMMEDIATELY — no questions first: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions. Sections in autoFilled were generated from evidence — the user edits if needed.
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
 5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
 
-Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. Put acceptance criteria / test scenarios / tester into the org's dedicated fields (mappings in ~/.ado-eod/rules.yaml) via the "fields"/"setFields" args — not into one giant Description.
+Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
 Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.3.1" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.3.2" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -68,12 +68,16 @@ server.tool(
       .object({ ticketId: z.number(), tester: z.string().optional() })
       .optional()
       .describe("Set ONLY when the user says the work is complete; tester = who verified it"),
+    testScenarios: z
+      .array(z.string())
+      .optional()
+      .describe("How the work was verified, as short bullets — the server routes these to the org's test-scenario FIELD; never paste them into notes or the comment"),
   },
-  async ({ date, tickets, notes, completion }) => {
+  async ({ date, tickets, notes, completion, testScenarios }) => {
     const blocked = notReady();
     if (blocked) return blocked;
     const evidence = await collectDay(date ?? today(), rules);
-    const result = await buildDrafts(ado, rules, { evidence, tickets, notes, completion });
+    const result = await buildDrafts(ado, rules, { evidence, tickets, notes, completion, testScenarios });
     return json(result);
   },
 );
@@ -253,20 +257,35 @@ server.tool(
     confirmed: z.literal(true).describe("Must be literally true — the user saw title/type/description and said yes"),
     type: z.string().describe("Work item type, e.g. Feature, Task, Bug — must exist in the project"),
     title: z.string(),
-    descriptionMarkdown: z.string().optional(),
+    descriptionMarkdown: z.string().optional().describe("Narrative and links ONLY — acceptance criteria and test scenarios have their own args"),
+    acceptanceCriteria: z.array(z.string()).optional().describe("Short bullets — the server routes these to the org's acceptance-criteria field"),
+    testScenarios: z.array(z.string()).optional().describe("Short bullets — the server routes these to the org's test-scenario field"),
     assignToSelf: z.boolean().optional().describe("Assign to the authenticated user"),
     tags: z.array(z.string()).optional(),
     fields: z
       .record(z.string(), z.any())
       .optional()
-      .describe(
-        "Additional fields by reference name — use the org's dedicated fields (acceptance criteria, test scenarios, tester) instead of stuffing everything into the description",
-      ),
+      .describe("Additional fields by reference name (e.g. the tester identity field)"),
   },
-  async ({ type, title, descriptionMarkdown, assignToSelf, tags, fields: extraFields }) => {
+  async ({ type, title, descriptionMarkdown, acceptanceCriteria, testScenarios, assignToSelf, tags, fields: extraFields }) => {
     const blocked = notReady();
     if (blocked) return blocked;
+    // seen live: AC pasted into the Description — refuse so it lands in the right field
+    const acField = rules.acceptanceCriteriaField?.[type];
+    const tsField = rules.testScenarioField?.[type];
+    if (descriptionMarkdown && /acceptance criteria\s*[:*]/i.test(descriptionMarkdown) && !acceptanceCriteria?.length)
+      return json({ error: "descriptionMarkdown contains an 'Acceptance Criteria' section — pass the bullets in the acceptanceCriteria arg instead (the server puts them in the org's dedicated field)" });
+    if (descriptionMarkdown && /test scenarios\s*[:*]/i.test(descriptionMarkdown) && !testScenarios?.length)
+      return json({ error: "descriptionMarkdown contains a 'Test scenarios' section — pass the bullets in the testScenarios arg instead" });
     const extra: Record<string, any> = { ...(extraFields ?? {}) };
+    if (acceptanceCriteria?.length) {
+      if (acField) extra[acField] = bulletList(acceptanceCriteria);
+      else descriptionMarkdown = `${descriptionMarkdown ?? ""}\n\n**Acceptance Criteria**\n${bulletList(acceptanceCriteria)}`.trim();
+    }
+    if (testScenarios?.length) {
+      if (tsField) extra[tsField] = bulletList(testScenarios);
+      else descriptionMarkdown = `${descriptionMarkdown ?? ""}\n\n**Test scenarios**\n${bulletList(testScenarios)}`.trim();
+    }
     if (assignToSelf) {
       const email = (await ado.whoAmI()).email;
       // some identity providers omit the account property — "?" would hit ADO as a literal assignee

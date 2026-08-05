@@ -26,6 +26,9 @@ the org; only configure with an address the user gave in this conversation.
      Factual, no fluff. Do NOT ask the user what they did; the evidence answers that.
    - `completion`: ONLY if the user said the work is complete. Include `tester` if they
      named who tested it ("tested with alex"). Never infer completion.
+   - `testScenarios`: how the work was verified, as short bullets. The server routes
+     them to the org's test-scenario **field** — never write them into `notes` or the
+     comment text.
 3. **Show the draft in chat immediately — no questions first** — per ticket: the comment
    markdown, `Completed Xh → Yh · N% → M% done`, proposed state, field appends and
    set-fields. List unattributed sessions and git-only repos too. Sections listed in
@@ -45,12 +48,11 @@ Only when the user explicitly asks to create one. Show type + title + descriptio
 chat, wait for yes, then `eod_create` with `confirmed: true`. Never create as a side
 effect of the daily flow.
 
-**Use the org's dedicated fields, not one giant Description.** Acceptance criteria go in
-the type's acceptance-criteria field, test scenarios in its test-scenarios field, the
-tester in the tester identity field — the per-type mappings live in
-`~/.ado-eod/rules.yaml` (`acceptanceCriteriaField`, `testScenarioField`, `testerField`).
-Pass them via `eod_create`'s `fields` arg or `eod_post`'s `setFields`. Description keeps
-only the narrative and links.
+**Use the dedicated args, not the Description.** Pass `acceptanceCriteria` and
+`testScenarios` as bullet arrays — the server routes them to the org's mapped fields
+and **rejects** a `descriptionMarkdown` that embeds an "Acceptance Criteria" or "Test
+scenarios" section. Description keeps only the narrative and links. The tester goes in
+the tester identity field via `fields`.
 
 ## Admin flow
 

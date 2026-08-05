@@ -271,3 +271,31 @@ test("splitHours: rounded sum never exceeds the day cap", () => {
   const total = [...out.values()].reduce((a, b) => a + b, 0);
   assert.equal(total <= rules.hours.maxPerDay, true, `total ${total} exceeds cap`);
 });
+
+test("testScenarios route to the org's field, not the comment (live mistake #2)", async () => {
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: { format: "markdown", required: ["testScenarios"], template: "{{summary}}\n{{testScenariosSection}}", signoffTemplate: "" },
+    completion: { maxProposedState: "Resolved", requireTester: false },
+    testScenarioField: { Bug: "Microsoft.VSTS.TCM.ReproSteps" },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({ id, rev: 1, fields: { "System.Title": "T", "System.WorkItemType": "Bug", "System.State": "Active", "System.TeamProject": "p" } }),
+    getComments: async () => [],
+  } as any;
+  const evidence: DayEvidence = { date: "2026-08-06", sessions: [], git: [], redactedLineCount: 0 };
+  const scenarios = ["login works in prod", "checkbox returns real values"];
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [21637], testScenarios: scenarios });
+  const d = drafts[0];
+  // routed to the mapped field…
+  assert.deepEqual(d.fieldAppends, [{ field: "Microsoft.VSTS.TCM.ReproSteps", markdown: "- login works in prod\n- checkbox returns real values" }]);
+  // …and NOT into the comment
+  assert.equal(d.commentMarkdown.includes("login works in prod"), false);
+  assert.equal(d.missingSections.length, 0);
+  // no mapping for this type → comment fallback, with its own header
+  const noMap = { ...draftRules, testScenarioField: {} } as Rules;
+  const { drafts: d2 } = await buildDrafts(fakeAdo, noMap, { evidence, tickets: [21637], testScenarios: scenarios });
+  assert.equal(d2[0].fieldAppends.length, 0);
+  assert.equal(d2[0].commentMarkdown.includes("**Test scenarios**\n- login works in prod"), true);
+});

@@ -35,6 +35,11 @@ export interface DraftInput {
   notes?: string; // live-conversation context from the assistant
   tickets?: number[]; // explicit ticket ids from the user's message
   completion?: { ticketId: number; tester?: string }; // user says work is complete
+  testScenarios?: string[]; // routed to the org's test-scenario FIELD, never the comment
+}
+
+export function bulletList(items: string[]): string {
+  return items.map((i) => `- ${i}`).join("\n");
 }
 
 // ADO strips HTML comments (<!-- -->) from Markdown comments, so the idempotency marker
@@ -266,6 +271,16 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
     : `Continue: ${draft.title ?? "current work"}.`;
   draft.autoFilled.push("next");
 
+  // Test scenarios belong in the org's dedicated FIELD (mistake seen live: they were
+  // pasted into the comment). Route them; the comment only carries them when no
+  // field mapping exists for this work item type.
+  const scenarioField = draft.workItemType ? rules.testScenarioField?.[draft.workItemType] : undefined;
+  const scenarios = input.testScenarios ?? [];
+  if (scenarios.length && scenarioField) {
+    draft.fieldAppends.push({ field: scenarioField, markdown: bulletList(scenarios) });
+  }
+
+  const inComment = scenarioField ? [] : scenarios; // field-routed scenarios stay out of the comment
   const vars: Record<string, any> = {
     date: input.evidence.date,
     workType: workTypes.join("+") || "implementation",
@@ -273,7 +288,8 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
     summary,
     repos: repoRows,
     issues: [],
-    testScenarios: [],
+    testScenarios: inComment, // legacy templates that still loop over it keep working
+    testScenariosSection: inComment.length ? `**Test scenarios**\n${bulletList(inComment)}\n` : "",
     next,
   };
 
@@ -281,7 +297,7 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
   // test scenarios when completion is proposed (the sign-off needs real ones).
   for (const section of rules.comment.required) {
     if (section === "summary" && !vars.summary) draft.missingSections.push("summary (no evidence found for this ticket today)");
-    if (section === "testScenarios" && draft.proposedState && !vars.testScenarios.length)
+    if (section === "testScenarios" && draft.proposedState && !scenarios.length)
       draft.missingSections.push("testScenarios (completion proposed — how was this verified?)");
   }
 

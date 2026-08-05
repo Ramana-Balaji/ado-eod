@@ -36,11 +36,7 @@ comment: # format + mandatory sections
     **Issues hit**
     {{#issues}}- {{.}}
     {{/issues}}
-
-    **Test scenarios**
-    {{#testScenarios}}- {{.}}
-    {{/testScenarios}}
-
+    {{testScenariosSection}}
     **Next:** {{next}}
   signoffTemplate: | # appended ONLY when completion is proposed
     **Status:** complete — tested with {{testerMention}}.
