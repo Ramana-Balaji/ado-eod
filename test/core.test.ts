@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
-import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, EOD_MARKER_RE } from "../src/draft.js";
+import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
@@ -298,4 +298,28 @@ test("testScenarios route to the org's field, not the comment (live mistake #2)"
   const { drafts: d2 } = await buildDrafts(fakeAdo, noMap, { evidence, tickets: [21637], testScenarios: scenarios });
   assert.equal(d2[0].fieldAppends.length, 0);
   assert.equal(d2[0].commentMarkdown.includes("**Test scenarios**\n- login works in prod"), true);
+});
+
+test("scenario/AC fields auto-discover from the type's field list — custom processes, typos included", async () => {
+  // the real org's field is literally "Test senarios" (Custom.Testsenarios) on a custom type
+  const fakeAdo = {
+    getTypeFields: async () => [
+      { name: "Test senarios", referenceName: "Custom.Testsenarios" },
+      { name: "Acceptance Criteria", referenceName: "Custom.AcceptCrit" },
+    ],
+  } as any;
+  const r = { testScenarioField: {}, acceptanceCriteriaField: {} } as unknown as Rules;
+  assert.equal(await resolveSectionField(fakeAdo, r, "Enhancement", "testScenarios"), "Custom.Testsenarios");
+  assert.equal(await resolveSectionField(fakeAdo, r, "Enhancement", "acceptanceCriteria"), "Custom.AcceptCrit");
+  // explicit mapping wins; no type or no match → undefined; broken ado call → undefined
+  const mapped = { testScenarioField: { Enhancement: "Custom.Explicit" } } as unknown as Rules;
+  assert.equal(await resolveSectionField(fakeAdo, mapped, "Enhancement", "testScenarios"), "Custom.Explicit");
+  assert.equal(await resolveSectionField(fakeAdo, r, undefined, "testScenarios"), undefined);
+  assert.equal(await resolveSectionField({ getTypeFields: undefined } as any, r, "Bug", "testScenarios"), undefined);
+});
+
+test("SCENARIO_HEADING_RE catches the live-mistake comment shapes", () => {
+  assert.equal(SCENARIO_HEADING_RE.test("work done\n\n**Test scenarios**\n- a"), true);
+  assert.equal(SCENARIO_HEADING_RE.test("## Test Senarios\n- a"), true);
+  assert.equal(SCENARIO_HEADING_RE.test("ran the test scenarios locally in prose"), false);
 });

@@ -130,6 +130,21 @@ export class AdoClient {
     }));
   }
 
+  private typeFieldsCache = new Map<string, Array<{ name: string; referenceName: string }>>();
+
+  /** Fields available on a work item type — used to auto-discover custom AC / test-scenario fields. */
+  async getTypeFields(type: string): Promise<Array<{ name: string; referenceName: string }>> {
+    const hit = this.typeFieldsCache.get(type);
+    if (hit) return hit;
+    const r = await this.req(
+      "GET",
+      `${this.baseProject}/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields?api-version=${API}`,
+    ).catch(() => ({ value: [] }));
+    const fields = (r.value ?? []).map((f: any) => ({ name: f.name ?? "", referenceName: f.referenceName ?? "" }));
+    this.typeFieldsCache.set(type, fields);
+    return fields;
+  }
+
   /** Allowed states for a work item type — process templates differ (Agile vs Scrum). */
   async getAllowedStates(workItemType: string): Promise<string[]> {
     const r = await this.req(

@@ -8,7 +8,7 @@ import { loadRules, writeUserRules } from "./rules.js";
 import { parseAdoInput } from "./setup.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, bulletList, EOD_MARKER_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -48,7 +48,7 @@ Admin questions ("how did <project> go this week", "what has <person> been worki
 
 Server-enforced (don't fight): hours cumulative with a daily cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.3.2" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.3.3" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -210,6 +210,18 @@ server.tool(
           continue;
         }
 
+        // hard rule, seen violated live twice: a comment must not carry a test-scenarios
+        // section when the type has a real field for it — that's what eod_draft's
+        // testScenarios arg is for
+        if (SCENARIO_HEADING_RE.test(u.commentMarkdown)) {
+          const sf = await resolveSectionField(ado, rules, wi.fields["System.WorkItemType"], "testScenarios");
+          const appendsCoverIt = (u.fieldAppends ?? []).some((fa) => fa.field === sf);
+          if (sf && !appendsCoverIt) {
+            results.push({ ticketId: u.ticketId, ok: false, error: `this comment embeds a Test scenarios section, but this work item type stores them in the "${sf}" field — redraft with eod_draft's testScenarios arg (the server routes them) and confirm again` });
+            continue;
+          }
+        }
+
         // idempotency: a same-day marker means UPDATE that comment and skip hour fields
         const comments = await ado.getComments(u.ticketId);
         const dup = findEodComment(comments, markerDate);
@@ -271,8 +283,9 @@ server.tool(
     const blocked = notReady();
     if (blocked) return blocked;
     // seen live: AC pasted into the Description — refuse so it lands in the right field
-    const acField = rules.acceptanceCriteriaField?.[type];
-    const tsField = rules.testScenarioField?.[type];
+    // (explicit rules mapping, else auto-discovered from the type's own field list)
+    const acField = await resolveSectionField(ado, rules, type, "acceptanceCriteria");
+    const tsField = await resolveSectionField(ado, rules, type, "testScenarios");
     if (descriptionMarkdown && /acceptance criteria\s*[:*]/i.test(descriptionMarkdown) && !acceptanceCriteria?.length)
       return json({ error: "descriptionMarkdown contains an 'Acceptance Criteria' section — pass the bullets in the acceptanceCriteria arg instead (the server puts them in the org's dedicated field)" });
     if (descriptionMarkdown && /test scenarios\s*[:*]/i.test(descriptionMarkdown) && !testScenarios?.length)

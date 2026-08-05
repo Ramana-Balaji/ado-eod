@@ -42,6 +42,34 @@ export function bulletList(items: string[]): string {
   return items.map((i) => `- ${i}`).join("\n");
 }
 
+// matches "Test scenarios", "Testsenarios", "Test Senarios" — org fields carry typos
+const SCENARIO_NAME_RE = /test.{0,3}enario/i;
+const AC_NAME_RE = /acceptance.{0,3}criteria/i;
+
+/**
+ * Which work-item FIELD holds test scenarios / acceptance criteria for this type.
+ * Explicit rules mapping wins; otherwise discover from the type's own field list —
+ * static defaults only know Agile templates, and custom processes are the norm.
+ */
+export async function resolveSectionField(
+  ado: Pick<AdoClient, "getTypeFields">,
+  rules: Rules,
+  type: string | undefined,
+  kind: "testScenarios" | "acceptanceCriteria",
+): Promise<string | undefined> {
+  if (!type) return undefined;
+  const mapped = (kind === "testScenarios" ? rules.testScenarioField : rules.acceptanceCriteriaField)?.[type];
+  if (mapped) return mapped;
+  const re = kind === "testScenarios" ? SCENARIO_NAME_RE : AC_NAME_RE;
+  const fields = await Promise.resolve()
+    .then(() => ado.getTypeFields(type))
+    .catch(() => [] as Array<{ name: string; referenceName: string }>);
+  return fields.find((f) => re.test(f.name) || re.test(f.referenceName))?.referenceName || undefined;
+}
+
+/** A comment must never carry a test-scenarios section when the type has a real field for it. */
+export const SCENARIO_HEADING_RE = /^(#{1,6}\s*|\*\*)test.{0,3}enarios?/im;
+
 // ADO strips HTML comments (<!-- -->) from Markdown comments, so the idempotency marker
 // is a visible footer in inline code — quiet, greppable, and it survives sanitization.
 export const EOD_MARKER_RE = /`eod:(\d{4}-\d{2}-\d{2}):[^`]*`/;
@@ -149,7 +177,8 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
         if (m && m[1] === input.evidence.date) draft.existingEodComment = { id: c.id, date: m[1] };
       }
       await applyCompletion(draft, wi, ado, rules, input);
-      buildComment(draft, sessions, input, rules);
+      const scenarioField = await resolveSectionField(ado, rules, draft.workItemType, "testScenarios");
+      buildComment(draft, sessions, input, rules, scenarioField);
     } catch (e: any) {
       draft.error = e.message ?? String(e);
     }
@@ -251,7 +280,7 @@ function autoSummary(draft: TicketDraft, sessions: SessionRecord[], input: Draft
   return parts.join(" ");
 }
 
-function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput, rules: Rules): void {
+function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput, rules: Rules, scenarioField?: string): void {
   const workTypes = [...new Set(sessions.map((s) => s.workType))];
   const repoRows = [...new Set(sessions.map((s) => s.cwd).filter(Boolean))].map((cwd) => ({
     name: cwd!.split("/").pop()!,
@@ -272,9 +301,8 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
   draft.autoFilled.push("next");
 
   // Test scenarios belong in the org's dedicated FIELD (mistake seen live: they were
-  // pasted into the comment). Route them; the comment only carries them when no
-  // field mapping exists for this work item type.
-  const scenarioField = draft.workItemType ? rules.testScenarioField?.[draft.workItemType] : undefined;
+  // pasted into the comment). Route them; the comment only carries them when the type
+  // truly has no such field (explicit mapping AND discovery both came up empty).
   const scenarios = input.testScenarios ?? [];
   if (scenarios.length && scenarioField) {
     draft.fieldAppends.push({ field: scenarioField, markdown: bulletList(scenarios) });
