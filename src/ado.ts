@@ -243,11 +243,25 @@ export class AdoClient {
     extra: Record<string, any> = {},
     markdownFields: string[] = [],
     project?: string,
+    parentId?: number,
   ): Promise<WorkItem> {
     return this.req(
       "POST",
       `${this.scope(project)}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=${API}`,
-      buildCreateOps(title, descriptionMarkdown, extra, markdownFields),
+      buildCreateOps(title, descriptionMarkdown, extra, markdownFields, parentId ? `${this.base}/_apis/wit/workItems/${parentId}` : undefined),
+      "application/json-patch+json",
+    );
+  }
+
+  /** Link an existing item under a parent (Feature → User Story → Task). */
+  async linkToParent(id: number, rev: number, parentId: number): Promise<WorkItem> {
+    return this.req(
+      "PATCH",
+      `${this.base}/_apis/wit/workitems/${id}?api-version=${API}`,
+      [
+        { op: "test", path: "/rev", value: rev },
+        { op: "add", path: "/relations/-", value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: `${this.base}/_apis/wit/workItems/${parentId}` } },
+      ],
       "application/json-patch+json",
     );
   }
@@ -275,6 +289,7 @@ export function buildCreateOps(
   descriptionMarkdown: string | undefined,
   extra: Record<string, any>,
   markdownFields: string[],
+  parentUrl?: string,
 ): any[] {
   const ops: any[] = [{ op: "add", path: "/fields/System.Title", value: title }];
   if (descriptionMarkdown) {
@@ -285,5 +300,7 @@ export function buildCreateOps(
     ops.push({ op: "add", path: `/fields/${k}`, value: v });
     if (markdownFields.includes(k)) ops.push({ op: "add", path: `/multilineFieldsFormat/${k}`, value: "Markdown" });
   }
+  // Hierarchy-Reverse = "my parent is X"; ADO enforces the type rules (Feature→Story→Task)
+  if (parentUrl) ops.push({ op: "add", path: "/relations/-", value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: parentUrl } });
   return ops;
 }

@@ -403,3 +403,13 @@ test("draft comment is bulleted and carries the date only once (in the marker)",
   // the date appears exactly once — in the eod marker, not the header
   assert.equal((c.match(/2026-08-06/g) ?? []).length, 1);
 });
+
+test("buildCreateOps emits the Hierarchy-Reverse parent link, and only when asked", () => {
+  const withParent = buildCreateOps("Story A", "desc", {}, [], "https://dev.azure.com/o/_apis/wit/workItems/100");
+  const rel = withParent.find((o: any) => o.path === "/relations/-");
+  assert.equal(rel.value.rel, "System.LinkTypes.Hierarchy-Reverse"); // reverse = "parent is 100"
+  assert.equal(rel.value.url.endsWith("/workItems/100"), true);
+  // the link op comes after the field ops — ADO rejects relations before fields on create
+  assert.equal(withParent.indexOf(rel) === withParent.length - 1, true);
+  assert.equal(buildCreateOps("T", undefined, {}, []).some((o: any) => o.path === "/relations/-"), false);
+});
