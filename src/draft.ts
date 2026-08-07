@@ -6,6 +6,8 @@ export interface TicketDraft {
   ticketId: number;
   /** System.Rev at draft time — eod_post requires it for its concurrent-edit guard. */
   rev?: number;
+  /** The ticket's own project — people work across several, so post uses this, not a global default. */
+  project?: string;
   title?: string;
   workItemType?: string;
   error?: string; // populated when the ticket can't be drafted (rules, not found…)
@@ -56,13 +58,14 @@ export async function resolveSectionField(
   rules: Rules,
   type: string | undefined,
   kind: "testScenarios" | "acceptanceCriteria",
+  project?: string,
 ): Promise<string | undefined> {
   if (!type) return undefined;
   const mapped = (kind === "testScenarios" ? rules.testScenarioField : rules.acceptanceCriteriaField)?.[type];
   if (mapped) return mapped;
   const re = kind === "testScenarios" ? SCENARIO_NAME_RE : AC_NAME_RE;
   const fields = await Promise.resolve()
-    .then(() => ado.getTypeFields(type))
+    .then(() => ado.getTypeFields(type, project))
     .catch(() => [] as Array<{ name: string; referenceName: string }>);
   return fields.find((f) => re.test(f.name) || re.test(f.referenceName))?.referenceName || undefined;
 }
@@ -171,13 +174,13 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
     try {
       const wi = await ado.getWorkItem(ticketId);
       applyWorkItem(draft, wi, rules, callerEmail);
-      const comments = await ado.getComments(ticketId);
+      const comments = await ado.getComments(ticketId, draft.project);
       for (const c of comments) {
         const m = c.text.match(EOD_MARKER_RE);
         if (m && m[1] === input.evidence.date) draft.existingEodComment = { id: c.id, date: m[1] };
       }
       await applyCompletion(draft, wi, ado, rules, input);
-      const scenarioField = await resolveSectionField(ado, rules, draft.workItemType, "testScenarios");
+      const scenarioField = await resolveSectionField(ado, rules, draft.workItemType, "testScenarios", draft.project);
       buildComment(draft, sessions, input, rules, scenarioField);
     } catch (e: any) {
       draft.error = e.message ?? String(e);
@@ -194,6 +197,7 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
 function applyWorkItem(draft: TicketDraft, wi: WorkItem, rules: Rules, callerEmail: string | null): void {
   const f = wi.fields;
   draft.rev = wi.rev;
+  draft.project = f["System.TeamProject"];
   draft.title = f["System.Title"];
   draft.workItemType = f["System.WorkItemType"];
   draft.currentState = f["System.State"];
@@ -227,7 +231,7 @@ async function applyCompletion(draft: TicketDraft, wi: WorkItem, ado: AdoClient,
     draft.proposedState = null;
     return;
   }
-  draft.allowedStates = await ado.getAllowedStates(draft.workItemType!).catch(() => []);
+  draft.allowedStates = await ado.getAllowedStates(draft.workItemType!, draft.project).catch(() => []);
   const target = rules.completion.maxProposedState;
   draft.proposedState = draft.allowedStates.includes(target) ? target : draft.allowedStates.find((s) => /resolved|done/i.test(s)) ?? null;
 

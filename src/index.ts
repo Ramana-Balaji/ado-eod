@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { loadRules, writeUserRules } from "./rules.js";
-import { parseAdoInput } from "./setup.js";
+import { parseAdoInput, parseWorkItemUrl } from "./setup.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
 import { buildDrafts, bulletList, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE, findEodComment } from "./draft.js";
@@ -15,6 +15,14 @@ import { report, ReportView } from "./report.js";
 // works in the same chat session without an IDE restart
 let { rules, sources, configErrors } = loadRules();
 let ado = new AdoClient(rules);
+
+/** Save org/project and reload in place — used by eod_configure and by pasted ticket links. */
+function applyConfig(org: string, project?: string): string {
+  const path = writeUserRules(org, project ?? rules.ado.project ?? undefined);
+  ({ rules, sources, configErrors } = loadRules());
+  ado = new AdoClient(rules);
+  return path;
+}
 
 /** ADO-touching tools refuse with a pointer to setup instead of a stack trace. */
 function notReady() {
@@ -33,11 +41,11 @@ function json(data: unknown) {
 // even ones setup never wrote a skill file for. The per-IDE SKILL.md is the richer layer.
 const INSTRUCTIONS = `End-of-day Azure DevOps ticket updates. Trigger phrases: "update my ticket", "log my day", or a pasted dev.azure.com work item link.
 
-First run: if any tool reports "not configured", ask the user to paste their Azure DevOps address (https://dev.azure.com/<org>/<project>) and call eod_configure with it — no terminal needed. Sign-in opens in the browser on the first Azure DevOps call.
+First run needs NO setup: pass any work item link the user pasted to eod_draft's ticketUrls — it carries the org and project and configures the tool automatically. Only if the user names no link and nothing is configured, ask for their Azure DevOps address and call eod_configure. Sign-in opens in the browser on the first Azure DevOps call.
 
 Daily flow — follow this order:
 1. eod_worklog for the day's evidence.
-2. eod_draft (tickets the user named; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
+2. eod_draft (pass pasted links in ticketUrls and/or bare ids in tickets; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
 3. Show the full draft in chat IMMEDIATELY — no questions first: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions. Sections in autoFilled were generated from evidence — the user edits if needed.
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
 5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
@@ -48,9 +56,11 @@ Admin questions ("how did <project> go this week", "what has <person> been worki
 
 Comments are BRIEF: 2-4 sentence summary + a Next line — the server rejects comments over the line cap (default 25). Detail belongs in fields, not the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
 
+Projects are per-ticket: each draft carries its own project, so tickets from different projects work in one run with no reconfiguration.
+
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.3.4" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.4.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -65,6 +75,7 @@ server.tool(
   {
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     tickets: z.array(z.number()).optional().describe("Explicit work item ids from the user's message"),
+    ticketUrls: z.array(z.string()).optional().describe("Work item LINKS the user pasted — preferred over ticket ids: they carry the org/project, so a first-time user needs no setup"),
     notes: z.string().optional().describe("Summary of the day's work from the live conversation"),
     completion: z
       .object({ ticketId: z.number(), tester: z.string().optional() })
@@ -75,11 +86,16 @@ server.tool(
       .optional()
       .describe("How the work was verified, as short bullets — the server routes these to the org's test-scenario FIELD; never paste them into notes or the comment"),
   },
-  async ({ date, tickets, notes, completion, testScenarios }) => {
+  async ({ date, tickets, ticketUrls, notes, completion, testScenarios }) => {
+    // a pasted link carries org (+project) — adopt it so first use needs no setup
+    const fromUrls = (ticketUrls ?? []).map(parseWorkItemUrl);
+    const withOrg = fromUrls.find((u) => u.org);
+    if (withOrg?.org && withOrg.org !== rules.ado.org) applyConfig(withOrg.org, withOrg.project);
     const blocked = notReady();
     if (blocked) return blocked;
+    const ids = [...new Set([...(tickets ?? []), ...fromUrls.map((u) => u.id).filter((n): n is number => !!n)])];
     const evidence = await collectDay(date ?? today(), rules);
-    const result = await buildDrafts(ado, rules, { evidence, tickets, notes, completion, testScenarios });
+    const result = await buildDrafts(ado, rules, { evidence, tickets: ids.length ? ids : undefined, notes, completion, testScenarios });
     return json(result);
   },
 );
@@ -95,9 +111,7 @@ server.tool(
     const parsed = parseAdoInput(adoUrl);
     if (!parsed.org)
       return json({ ok: false, error: `could not find an organization in "${adoUrl}" — ask the user for the address of the page where their tickets live (https://dev.azure.com/<org>/<project>)` });
-    const path = writeUserRules(parsed.org, project ?? parsed.project);
-    ({ rules, sources, configErrors } = loadRules());
-    ado = new AdoClient(rules);
+    const path = applyConfig(parsed.org, project ?? parsed.project);
     return json({
       ok: true,
       org: rules.ado.org,
@@ -220,8 +234,10 @@ server.tool(
         }
 
         const wiType = wi.fields["System.WorkItemType"];
-        const scenarioF = await resolveSectionField(ado, rules, wiType, "testScenarios");
-        const acF = await resolveSectionField(ado, rules, wiType, "acceptanceCriteria");
+        // the ticket's OWN project — a user works across several, one global default is wrong
+        const wiProject = wi.fields["System.TeamProject"];
+        const scenarioF = await resolveSectionField(ado, rules, wiType, "testScenarios", wiProject);
+        const acF = await resolveSectionField(ado, rules, wiType, "acceptanceCriteria", wiProject);
 
         // hard rule, seen violated live twice: a comment must not carry a test-scenarios
         // section when the type has a real field for it — that's what eod_draft's
@@ -232,12 +248,12 @@ server.tool(
         }
 
         // idempotency: a same-day marker means UPDATE that comment and skip hour fields
-        const comments = await ado.getComments(u.ticketId);
+        const comments = await ado.getComments(u.ticketId, wiProject);
         const dup = findEodComment(comments, markerDate);
         const skipHours = Boolean(dup);
 
-        if (dup) await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format);
-        else await ado.addComment(u.ticketId, u.commentMarkdown, rules.comment.format);
+        if (dup) await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format, wiProject);
+        else await ado.addComment(u.ticketId, u.commentMarkdown, rules.comment.format, wiProject);
 
         const fields: Record<string, any> = {};
         const markdownFields: string[] = [];

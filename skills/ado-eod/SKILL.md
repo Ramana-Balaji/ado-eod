@@ -10,17 +10,22 @@ and relay its message — it names the fix (sign-in, rules file, missing history
 
 ## First run (not configured yet)
 
-If a tool reports "not configured": ask the user to paste their Azure DevOps address —
-the page where their tickets live, like `https://dev.azure.com/<org>/<project>` — then
-call `eod_configure` with it. No terminal or restart needed. Sign-in opens in their
-browser on the first Azure DevOps call — tell them to watch for the window. Never guess
-the org; only configure with an address the user gave in this conversation.
+**Usually nothing to do** — pass any work item link the user pasted to `eod_draft`'s
+`ticketUrls`. The link carries org and project, so the tool configures itself.
+
+Only when the user gives no link and nothing is configured: ask for their Azure DevOps
+address and call `eod_configure`. Never guess the org. Sign-in opens in their browser on
+the first Azure DevOps call — tell them to watch for the window.
+
+Tickets from **different projects** work in one run: each draft carries its own
+project, resolved from the work item itself.
 
 ## Daily flow (developer)
 
 1. `eod_worklog` — today's evidence (or `date` if the user names another day). Read it.
 2. `eod_draft` with:
-   - `tickets`: any work item ids/links the user mentioned (extract the number)
+   - `ticketUrls`: full links the user pasted (preferred — they carry org/project)
+   - `tickets`: bare work item ids the user typed
    - `notes`: 2–4 sentence summary of what was actually done — **write it yourself**
      from the worklog evidence (prompts, files, commits) and the live conversation.
      Factual, no fluff. Do NOT ask the user what they did; the evidence answers that.

@@ -23,7 +23,21 @@ export class AdoClient {
 
   constructor(private rules: Rules) {
     this.base = `https://dev.azure.com/${rules.ado.org}`;
-    this.baseProject = `${this.base}/${encodeURIComponent(rules.ado.project)}`;
+    this.baseProject = `${this.base}/${encodeURIComponent(rules.ado.project ?? "")}`;
+  }
+
+  /**
+   * Project-scoped URL base. People work across several projects, so callers pass the
+   * ticket's own System.TeamProject instead of relying on one configured default.
+   */
+  private scope(project?: string): string {
+    return project ? `${this.base}/${encodeURIComponent(project)}` : this.baseProject;
+  }
+
+  /** The project a work item actually lives in — org-scoped read, no project needed. */
+  async getProjectOf(id: number): Promise<string | undefined> {
+    const wi = await this.getWorkItem(id);
+    return wi.fields?.["System.TeamProject"];
   }
 
   private async token(): Promise<string> {
@@ -89,14 +103,14 @@ export class AdoClient {
     return out;
   }
 
-  async getComments(id: number): Promise<Array<{ id: number; text: string; createdBy: string; createdDate: string }>> {
+  async getComments(id: number, project?: string): Promise<Array<{ id: number; text: string; createdBy: string; createdDate: string }>> {
     // paginated, oldest first — the day's marker comment is exactly what falls off page 1
     // on long-lived tickets, which would break idempotency (duplicate comments, double hours)
     const all: any[] = [];
     let token: string | undefined;
     for (let page = 0; page < 50; page++) {
       const tk = token ? `&continuationToken=${encodeURIComponent(token)}` : "";
-      const r = await this.req("GET", `${this.baseProject}/_apis/wit/workItems/${id}/comments?$top=200${tk}&api-version=${API}-preview.4`);
+      const r = await this.req("GET", `${this.scope(project)}/_apis/wit/workItems/${id}/comments?$top=200${tk}&api-version=${API}-preview.4`);
       all.push(...(r.comments ?? []));
       token = r.continuationToken;
       if (!token) break;
@@ -133,23 +147,23 @@ export class AdoClient {
   private typeFieldsCache = new Map<string, Array<{ name: string; referenceName: string }>>();
 
   /** Fields available on a work item type — used to auto-discover custom AC / test-scenario fields. */
-  async getTypeFields(type: string): Promise<Array<{ name: string; referenceName: string }>> {
-    const hit = this.typeFieldsCache.get(type);
+  async getTypeFields(type: string, project?: string): Promise<Array<{ name: string; referenceName: string }>> {
+    const hit = this.typeFieldsCache.get(`${project ?? ""}:${type}`);
     if (hit) return hit;
     const r = await this.req(
       "GET",
-      `${this.baseProject}/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields?api-version=${API}`,
+      `${this.scope(project)}/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields?api-version=${API}`,
     ).catch(() => ({ value: [] }));
     const fields = (r.value ?? []).map((f: any) => ({ name: f.name ?? "", referenceName: f.referenceName ?? "" }));
-    this.typeFieldsCache.set(type, fields);
+    this.typeFieldsCache.set(`${project ?? ""}:${type}`, fields);
     return fields;
   }
 
   /** Allowed states for a work item type — process templates differ (Agile vs Scrum). */
-  async getAllowedStates(workItemType: string): Promise<string[]> {
+  async getAllowedStates(workItemType: string, project?: string): Promise<string[]> {
     const r = await this.req(
       "GET",
-      `${this.baseProject}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/states?api-version=${API}-preview.1`,
+      `${this.scope(project)}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/states?api-version=${API}-preview.1`,
     );
     return (r.value ?? []).map((s: any) => s.name);
   }
@@ -180,12 +194,12 @@ export class AdoClient {
     return typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403 && e.status !== 429;
   }
 
-  async addComment(id: number, text: string, format: "markdown" | "html"): Promise<void> {
+  async addComment(id: number, text: string, format: "markdown" | "html", project?: string): Promise<void> {
     if (format === "markdown") {
       try {
         await this.req(
           "POST",
-          `${this.baseProject}/_apis/wit/workItems/${id}/comments?format=markdown&api-version=${API}-preview.4`,
+          `${this.scope(project)}/_apis/wit/workItems/${id}/comments?format=markdown&api-version=${API}-preview.4`,
           { text },
         );
         this.commentsMarkdownSupported = true;
@@ -197,16 +211,16 @@ export class AdoClient {
         this.commentsMarkdownSupported = false;
       }
     }
-    await this.req("POST", `${this.baseProject}/_apis/wit/workItems/${id}/comments?api-version=${API}-preview.4`, { text });
+    await this.req("POST", `${this.scope(project)}/_apis/wit/workItems/${id}/comments?api-version=${API}-preview.4`, { text });
   }
 
   /** Replace an existing comment's text — same-day re-runs update, never duplicate. */
-  async updateComment(id: number, commentId: number, text: string, format: "markdown" | "html"): Promise<void> {
+  async updateComment(id: number, commentId: number, text: string, format: "markdown" | "html", project?: string): Promise<void> {
     const fmt = format === "markdown" && this.commentsMarkdownSupported !== false ? "&format=markdown" : "";
     try {
       await this.req(
         "PATCH",
-        `${this.baseProject}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4${fmt}`,
+        `${this.scope(project)}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4${fmt}`,
         { text },
       );
     } catch (e) {
@@ -215,7 +229,7 @@ export class AdoClient {
       if (!fmt || !AdoClient.formatRejected(e)) throw e;
       await this.req(
         "PATCH",
-        `${this.baseProject}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4`,
+        `${this.scope(project)}/_apis/wit/workItems/${id}/comments/${commentId}?api-version=${API}-preview.4`,
         { text },
       );
     }
@@ -228,10 +242,11 @@ export class AdoClient {
     descriptionMarkdown?: string,
     extra: Record<string, any> = {},
     markdownFields: string[] = [],
+    project?: string,
   ): Promise<WorkItem> {
     return this.req(
       "POST",
-      `${this.baseProject}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=${API}`,
+      `${this.scope(project)}/_apis/wit/workitems/$${encodeURIComponent(type)}?api-version=${API}`,
       buildCreateOps(title, descriptionMarkdown, extra, markdownFields),
       "application/json-patch+json",
     );

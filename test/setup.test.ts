@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { parseAdoInput, upsertMarkerBlock, AG_MARKERS, hasAdoEodPlugin } from "../src/setup.js";
+import { parseAdoInput, parseWorkItemUrl, upsertMarkerBlock, AG_MARKERS, hasAdoEodPlugin } from "../src/setup.js";
 import { writeUserRules } from "../src/rules.js";
 
 test("upsertMarkerBlock appends once, then replaces — never duplicates on re-run", () => {
@@ -100,4 +100,16 @@ test("loadRules-style merge guard: writeUserRules never emits a bare null key", 
   const dir = mkdtempSync(join(tmpdir(), "ado-eod-null-"));
   const doc = parseYaml(readFileSync(writeUserRules("contoso", undefined, dir), "utf8"));
   assert.deepEqual(doc, { ado: { org: "contoso" } });
+});
+
+test("parseWorkItemUrl extracts org/project/id — a pasted link is the whole config", () => {
+  assert.deepEqual(
+    parseWorkItemUrl("https://dev.azure.com/anugal/Symphony%20Development/_workitems/edit/21637"),
+    { org: "anugal", project: "Symphony Development", id: 21637 },
+  );
+  // org-level link without a project segment — "_workitems" must not become the project
+  assert.deepEqual(parseWorkItemUrl("https://dev.azure.com/anugal/_workitems/edit/99"), { org: "anugal", project: undefined, id: 99 });
+  // no id in a plain project link
+  assert.deepEqual(parseWorkItemUrl("https://dev.azure.com/anugal/Proj"), { org: "anugal", project: "Proj", id: undefined });
+  assert.equal(parseWorkItemUrl("not a url").id, undefined);
 });

@@ -6,11 +6,27 @@ import { fileURLToPath } from "node:url";
 
 const HOME = homedir();
 const cliPath = fileURLToPath(new URL("./cli.js", import.meta.url));
+
+/**
+ * Absolute path to a node binary, never the bare name.
+ * GUI-launched IDEs (Cursor, Claude Desktop) do NOT inherit the shell PATH, so a
+ * bare "npx" is ENOENT under nvm/fnm/volta — the server silently never starts and the
+ * assistant falls back to the az CLI. process.execPath is the node running setup.
+ */
+function nodeBin(name: "node" | "npx"): string {
+  if (name === "node") return process.execPath;
+  const dir = dirname(process.execPath);
+  for (const candidate of [join(dir, "npx"), join(dir, "npx.cmd")]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "npx"; // last resort — PATH lookup
+}
+
 // Running from the npx cache? That path gets evicted — configs must re-resolve via npx.
 // A local clone gets a stable node+path command instead (faster, works offline).
 const serverCmd = /[\\/]_npx[\\/]/.test(cliPath)
-  ? { command: "npx", args: ["-y", "github:Ramana-Balaji/ado-eod", "serve"] }
-  : { command: "node", args: [cliPath, "serve"] };
+  ? { command: nodeBin("npx"), args: ["-y", "github:Ramana-Balaji/ado-eod", "serve"] }
+  : { command: nodeBin("node"), args: [cliPath, "serve"] };
 
 interface Ide {
   name: string;
@@ -56,6 +72,19 @@ function writeJsonMerged(path: string, mutate: (doc: any) => void): void {
   mutate(doc);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(doc, null, 2) + "\n");
+}
+
+/**
+ * Pull org/project/work-item-id out of a pasted ADO link.
+ * This is how a new user configures the tool — the link they already have carries
+ * everything, so setup never has to ask.
+ */
+export function parseWorkItemUrl(input: string): { org?: string; project?: string; id?: number } {
+  const { org, project } = parseAdoInput(input);
+  const m = input.match(/_workitems\/edit\/(\d+)/i) ?? input.match(/\/_workitems\/(\d+)/i);
+  const id = m ? Number(m[1]) : undefined;
+  // ".../_workitems/edit/123" — "_workitems" is a route segment, never the project
+  return { org, project: project && /^_/.test(project) ? undefined : project, id };
 }
 
 /** Accepts "contoso", "https://dev.azure.com/contoso/My%20Project/...", or "contoso.visualstudio.com". */
@@ -168,8 +197,8 @@ const IDES: Ide[] = [
 export async function setup(argv: string[] = []): Promise<void> {
   console.log("ado-eod setup\n");
 
-  // --org <name> --project <name> → machine-local rules file.
-  // No flags? Ask. People paste URLs, not org slugs — accept either.
+  // Org/project are NOT asked here — the first ticket link the user pastes in chat
+  // carries both, and eod_configure saves them. Flags stay for scripted installs.
   const flag = (name: string) => {
     const i = argv.indexOf(`--${name}`);
     return i >= 0 ? argv[i + 1] : undefined;
@@ -178,20 +207,8 @@ export async function setup(argv: string[] = []): Promise<void> {
   let project = flag("project");
   const userRulesPath = join(HOME, ".ado-eod", "rules.yaml");
 
-  if (!org && !existsSync(userRulesPath) && process.stdin.isTTY) {
-    const { createInterface } = await import("node:readline/promises");
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    console.log("  Where do your tickets live? Open Azure DevOps in your browser and");
-    console.log("  copy the address — it looks like: https://dev.azure.com/<your-org>/<your-project>\n");
-    const answer = (await rl.question("  Paste that address (or just your organization name): ")).trim();
-    ({ org, project } = parseAdoInput(answer));
-    if (org && !project) {
-      project = (await rl.question(`  Project name inside "${org}" (Enter to skip): `)).trim() || undefined;
-    }
-    rl.close();
-  } else if (org) {
-    // --org may also be a pasted URL
-    const parsed = parseAdoInput(org);
+  if (org) {
+    const parsed = parseAdoInput(org); // --org may also be a pasted URL
     org = parsed.org;
     project = project ?? parsed.project;
   }
@@ -200,10 +217,6 @@ export async function setup(argv: string[] = []): Promise<void> {
     const { writeUserRules } = await import("./rules.js");
     writeUserRules(org, project);
     console.log(`  ✓ Saved org "${org}"${project ? ` / project "${project}"` : ""} to ${userRulesPath}`);
-  } else if (!existsSync(userRulesPath)) {
-    console.log("  ! No Azure DevOps organization configured yet.");
-    console.log("    Your org is the first name in your Azure DevOps address: dev.azure.com/<org>");
-    console.log('    Re-run:  npx ado-eod setup --org <your-org> --project "<your project>"\n');
   }
 
   const skillText = existsSync(skillSource) ? readFileSync(skillSource, "utf8") : null;
@@ -253,5 +266,7 @@ export async function setup(argv: string[] = []): Promise<void> {
     }
   }
 
-  console.log(`\nDone. Restart ${found.join(" / ")} and try: "update my ticket for today"`);
+  console.log(`\nDone. Restart ${found.join(" / ")}, then paste any ticket link in chat:`);
+  console.log("  \"update https://dev.azure.com/<org>/<project>/_workitems/edit/12345 with today's work\"");
+  console.log("  (the link tells it your org and project — nothing else to configure)");
 }
