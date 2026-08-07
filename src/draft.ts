@@ -44,6 +44,37 @@ export function bulletList(items: string[]): string {
   return items.map((i) => `- ${i}`).join("\n");
 }
 
+/**
+ * Comment bodies are bullets, never paragraphs. Accepts what the assistant sends
+ * (prose, newline list, already-bulleted) and always returns bullet lines.
+ */
+export function toBullets(text: string): string {
+  const raw = text.trim();
+  if (!raw) return "";
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  // already a list? just normalise the marker character
+  if (lines.length > 1 && lines.every((l) => /^([-*•]|\d+[.)])\s+/.test(l)))
+    return lines.map((l) => `- ${l.replace(/^([-*•]|\d+[.)])\s+/, "")}`).join("\n");
+  const items = lines.flatMap((line) =>
+    /^([-*•]|\d+[.)])\s+/.test(line)
+      ? [line.replace(/^([-*•]|\d+[.)])\s+/, "")]
+      // split prose into sentences — ". " outside of abbreviations/versions
+      : line.split(/(?<=[.!?])\s+(?=[A-Z(])/).map((s) => s.trim()).filter(Boolean),
+  );
+  return bulletList(items.map((i) => i.replace(/\s*\.\s*$/, "")));
+}
+
+/** Lines a comment may contain besides bullets: headers, quotes, rules, the marker. */
+const ALLOWED_NON_BULLET = /^(\*\*|#{1,6}\s|>|---|\||`eod:)/;
+
+/** Prose paragraphs that slipped into a comment — eod_post refuses these. */
+export function proseLines(comment: string): string[] {
+  return comment
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^([-*•]|\d+[.)])\s+/.test(l) && !ALLOWED_NON_BULLET.test(l));
+}
+
 // matches "Test scenarios", "Testsenarios", "Test Senarios" — org fields carry typos
 const SCENARIO_NAME_RE = /test.{0,3}enario/i;
 const AC_NAME_RE = /acceptance.{0,3}criteria/i;
@@ -277,11 +308,12 @@ function autoSummary(draft: TicketDraft, sessions: SessionRecord[], input: Draft
     ),
   ];
   const files = new Set(sessions.flatMap((s) => s.files)).size;
-  const parts: string[] = [];
-  if (commits.length) parts.push(`Commits: ${commits.slice(0, 5).join("; ")}${commits.length > 5 ? ` (+${commits.length - 5} more)` : ""}.`);
-  if (sessions.length) parts.push(`${sessions.length} working session${sessions.length > 1 ? "s" : ""}, ${files} file${files === 1 ? "" : "s"} touched.`);
-  if (!parts.length && draft.title) parts.push(`Worked on: ${draft.title}.`);
-  return parts.join(" ");
+  // one bullet per commit — comments are scannable lists, never paragraphs
+  const parts: string[] = commits.slice(0, 6);
+  if (commits.length > 6) parts.push(`+${commits.length - 6} more commits`);
+  if (sessions.length) parts.push(`${sessions.length} working session${sessions.length > 1 ? "s" : ""}, ${files} file${files === 1 ? "" : "s"} touched`);
+  if (!parts.length && draft.title) parts.push(`Worked on: ${draft.title}`);
+  return bulletList(parts);
 }
 
 function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput, rules: Rules, scenarioField?: string): void {
@@ -294,7 +326,7 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
   // Every section is filled from evidence (notes from the live conversation win when
   // given). The user edits the shown draft — they are never interrogated section by
   // section. autoFilled records what was generated so the assistant can point at it.
-  let summary = input.notes ?? "";
+  let summary = input.notes ? toBullets(input.notes) : "";
   if (!summary) {
     summary = autoSummary(draft, sessions, input);
     if (summary) draft.autoFilled.push("summary");

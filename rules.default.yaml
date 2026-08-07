@@ -24,16 +24,17 @@ comment: # format + mandatory sections
   # required sections are auto-filled from evidence (commits, sessions, ticket title);
   # only what nothing can derive is asked: summary with zero evidence, testScenarios on completion
   required: [summary, next, testScenarios, description, acceptanceCriteria]
-  # compact by design — comments are a daily log line, not a report
+  # compact + bulleted by design. No {{date}} here: the `eod:<date>` footer already
+  # carries it (and ADO stamps its own timestamp) — showing it twice is noise.
   template: |
-    **{{date}} — {{workType}}** ({{hours}}h)
+    **{{workType}}** ({{hours}}h)
 
     {{summary}}
     {{testScenariosSection}}
     **Next:** {{next}}
   signoffTemplate: | # appended ONLY when completion is proposed
     **Status:** complete — tested with {{testerMention}}.
-    {{testerMention}} could you confirm this works as expected and the ticket can be closed?
+    - {{testerMention}} please confirm and close if it works as expected.
 
 completion:
   maxProposedState: Resolved # tool never proposes Closed — tester closes

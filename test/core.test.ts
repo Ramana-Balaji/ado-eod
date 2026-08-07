@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
-import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
+import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
@@ -242,7 +242,7 @@ test("draft auto-fills summary/next from evidence — never interrogates for dai
   assert.deepEqual(d.autoFilled, ["summary", "next"]);
   // explicit notes win over the auto summary
   const { drafts: d2 } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42], notes: "Chased the redirect loop." });
-  assert.equal(d2[0].commentMarkdown.includes("Chased the redirect loop."), true);
+  assert.equal(d2[0].commentMarkdown.includes("- Chased the redirect loop"), true); // bulleted, period trimmed
   assert.equal(d2[0].autoFilled.includes("summary"), false);
 });
 
@@ -356,5 +356,50 @@ test("default comment template is compact — a typical draft stays well under t
   };
   const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [7], testScenarios: ["checked x", "checked y"] });
   const lines = drafts[0].commentMarkdown.split("\n").length;
-  assert.equal(lines <= 12, true, `compact template rendered ${lines} lines`);
+  assert.equal(lines <= 25, true, `compact template rendered ${lines} lines`); // must fit the enforced cap
+});
+
+test("toBullets: prose, newline lists and existing bullets all become clean bullets", () => {
+  assert.equal(toBullets("Did A. Then did B."), "- Did A\n- Then did B");
+  assert.equal(toBullets("* one\n* two"), "- one\n- two");
+  assert.equal(toBullets("1. one\n2) two"), "- one\n- two");
+  assert.equal(toBullets("  single fact  "), "- single fact");
+  assert.equal(toBullets(""), "");
+});
+
+test("proseLines flags paragraph comments, allows bullets/headers/marker/signoff", () => {
+  const good = "**implementation** (2h)\n\n- did a thing\n- did another\n\n**Next:** more\n\n---\n`eod:2026-08-06:abc`";
+  assert.deepEqual(proseLines(good), []);
+  const bad = "**implementation** (2h)\n\nBuilt the Maestro provider configuration form across the React front-end.\n- ok";
+  assert.equal(proseLines(bad).length, 1);
+  assert.equal(proseLines(bad)[0].startsWith("Built the Maestro"), true);
+});
+
+test("draft comment is bulleted and carries the date only once (in the marker)", async () => {
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: {
+      format: "markdown", required: [], maxLines: 25,
+      template: "**{{workType}}** ({{hours}}h)\n\n{{summary}}\n{{testScenariosSection}}\n**Next:** {{next}}",
+      signoffTemplate: "",
+    },
+    completion: { maxProposedState: "Resolved", requireTester: false },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({ id, rev: 1, fields: { "System.Title": "Fix login", "System.WorkItemType": "Task", "System.State": "Active", "System.TeamProject": "p" } }),
+    getComments: async () => [],
+    getTypeFields: async () => [],
+  } as any;
+  const evidence: DayEvidence = {
+    date: "2026-08-06", sessions: [],
+    git: [{ repo: "/r/a", branch: "b", commits: ["fix redirect", "add test"], ticketIds: ["42"], hasSession: true }],
+    redactedLineCount: 0,
+  };
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42] });
+  const c = drafts[0].commentMarkdown;
+  assert.deepEqual(proseLines(c), [], `comment has prose: ${proseLines(c)}`);
+  assert.equal(c.includes("- fix redirect"), true);
+  // the date appears exactly once — in the eod marker, not the header
+  assert.equal((c.match(/2026-08-06/g) ?? []).length, 1);
 });

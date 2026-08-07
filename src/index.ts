@@ -8,7 +8,7 @@ import { loadRules, writeUserRules } from "./rules.js";
 import { parseAdoInput, parseWorkItemUrl } from "./setup.js";
 import { collectDay, localToday } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, bulletList, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, proseLines, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -45,7 +45,7 @@ First run needs NO setup: pass any work item link the user pasted to eod_draft's
 
 Daily flow — follow this order:
 1. eod_worklog for the day's evidence.
-2. eod_draft (pass pasted links in ticketUrls and/or bare ids in tickets; write "notes" YOURSELF — a 2-4 sentence factual summary from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
+2. eod_draft (pass pasted links in ticketUrls and/or bare ids in tickets; write "notes" YOURSELF — short bullet lines of fact from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
 3. Show the full draft in chat IMMEDIATELY — no questions first: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions. Sections in autoFilled were generated from evidence — the user edits if needed.
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
 5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
@@ -54,13 +54,13 @@ Ticket creation (eod_create): only on explicit request, after showing type+title
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
-Comments are BRIEF: 2-4 sentence summary + a Next line — the server rejects comments over the line cap (default 25). Detail belongs in fields, not the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
+Comments are BRIEF and BULLETED: pass "notes" as short bullet lines (one fact each), never a paragraph — the server REJECTS any comment containing a prose paragraph, and any comment over the line cap (default 25). Detail belongs in fields, not the comment. Do not put the date in the comment body; the eod footer carries it. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
 
 Projects are per-ticket: each draft carries its own project, so tickets from different projects work in one run with no reconfiguration.
 
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.4.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.4.1" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -223,6 +223,13 @@ server.tool(
         const wi = await ado.getWorkItem(u.ticketId);
         if (wi.rev !== u.rev) {
           results.push({ ticketId: u.ticketId, ok: false, error: `ticket changed since draft (rev ${u.rev} → ${wi.rev}) — redraft with eod_draft and confirm again` });
+          continue;
+        }
+
+        // bullets only — a paragraph comment is unscannable and was reported twice
+        const prose = proseLines(u.commentMarkdown);
+        if (prose.length) {
+          results.push({ ticketId: u.ticketId, ok: false, error: `comment must be bullet points, not paragraphs. Rewrite these lines as "- " bullets: ${prose.map((l) => l.slice(0, 60)).join(" | ")}` });
           continue;
         }
 

@@ -26,9 +26,10 @@ project, resolved from the work item itself.
 2. `eod_draft` with:
    - `ticketUrls`: full links the user pasted (preferred — they carry org/project)
    - `tickets`: bare work item ids the user typed
-   - `notes`: 2–4 sentence summary of what was actually done — **write it yourself**
-     from the worklog evidence (prompts, files, commits) and the live conversation.
-     Factual, no fluff. Do NOT ask the user what they did; the evidence answers that.
+   - `notes`: what was actually done as **short bullet lines** (one fact per line) —
+     **write it yourself** from the worklog evidence (prompts, files, commits) and the
+     live conversation. Factual, no fluff, never a paragraph — the server rejects prose.
+     Do NOT ask the user what they did; the evidence answers that. No date in the text.
    - `completion`: ONLY if the user said the work is complete. Include `tester` if they
      named who tested it ("tested with alex"). Never infer completion.
    - `testScenarios`: how the work was verified, as short bullets. The server routes
@@ -45,8 +46,9 @@ project, resolved from the work item itself.
 
 Rules (enforced by the server, don't fight them): hours are cumulative and capped per
 day; the tool never proposes Closed — the tester closes after confirming; a same-day
-re-run replaces the comment and skips hour fields (idempotent); comments over the line
-cap (default 25) are rejected — keep `notes` to 2–4 sentences, details go in fields.
+re-run replaces the comment and skips hour fields (idempotent); comments are rejected
+if they contain a prose paragraph or exceed the line cap (default 25) — bullets only,
+details go in fields.
 All long-text content is posted as real Markdown; plain fields (title) stay plain.
 
 ## Creating a ticket
