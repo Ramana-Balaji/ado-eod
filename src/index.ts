@@ -50,7 +50,7 @@ Daily flow — follow this order:
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
 5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
 
-Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
+Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. To nest items pass parentId (or parentUrl) — the child is created in the parent's project and linked as its child; assignToSelf:true assigns it to the signed-in user. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
@@ -306,6 +306,8 @@ server.tool(
     descriptionMarkdown: z.string().optional().describe("Narrative and links ONLY — acceptance criteria and test scenarios have their own args"),
     acceptanceCriteria: z.array(z.string()).optional().describe("Short bullets — the server routes these to the org's acceptance-criteria field"),
     testScenarios: z.array(z.string()).optional().describe("Short bullets — the server routes these to the org's test-scenario field"),
+    parentId: z.number().optional().describe("Link the new item as a CHILD of this work item id (Feature → User Story → Task). ADO rejects combinations its process template disallows."),
+    parentUrl: z.string().optional().describe("Parent work item LINK, if the user pasted one instead of an id"),
     assignToSelf: z.boolean().optional().describe("Assign to the authenticated user"),
     tags: z.array(z.string()).optional(),
     fields: z
@@ -313,7 +315,7 @@ server.tool(
       .optional()
       .describe("Additional fields by reference name (e.g. the tester identity field)"),
   },
-  async ({ type, title, descriptionMarkdown, acceptanceCriteria, testScenarios, assignToSelf, tags, fields: extraFields }) => {
+  async ({ type, title, descriptionMarkdown, acceptanceCriteria, testScenarios, parentId, parentUrl, assignToSelf, tags, fields: extraFields }) => {
     const blocked = notReady();
     if (blocked) return blocked;
     // seen live: AC pasted into the Description — refuse so it lands in the right field
@@ -342,11 +344,22 @@ server.tool(
     if (tags?.length) extra["System.Tags"] = tags.join("; ");
     // discovered section fields get the Markdown format op too, not just the static list
     const mdFields = [...new Set([...(rules.fields.markdownFields ?? []), acField, tsField].filter(Boolean) as string[])];
-    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, mdFields);
+
+    // a child is created in its PARENT's project — cross-project hierarchy links are invalid
+    const parent = parentId ?? (parentUrl ? parseWorkItemUrl(parentUrl).id : undefined);
+    let project: string | undefined;
+    if (parent) {
+      project = await ado.getProjectOf(parent).catch(() => undefined);
+      if (!project) return json({ error: `parent work item ${parent} not found or not readable — check the id/link` });
+    }
+    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, mdFields, project, parent);
+    const proj = project ?? rules.ado.project;
     return json({
       id: wi.id,
       rev: wi.rev,
-      url: `https://dev.azure.com/${rules.ado.org}/${encodeURIComponent(rules.ado.project)}/_workitems/edit/${wi.id}`,
+      parent: parent ?? null,
+      project: proj,
+      url: `https://dev.azure.com/${rules.ado.org}/${encodeURIComponent(proj)}/_workitems/edit/${wi.id}`,
     });
   },
 );
