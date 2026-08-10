@@ -194,16 +194,16 @@ export class AdoClient {
     return typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.status !== 401 && e.status !== 403 && e.status !== 429;
   }
 
-  async addComment(id: number, text: string, format: "markdown" | "html", project?: string): Promise<void> {
+  async addComment(id: number, text: string, format: "markdown" | "html", project?: string): Promise<{ id?: number }> {
     if (format === "markdown") {
       try {
-        await this.req(
+        const r = await this.req(
           "POST",
           `${this.scope(project)}/_apis/wit/workItems/${id}/comments?format=markdown&api-version=${API}-preview.4`,
           { text },
         );
         this.commentsMarkdownSupported = true;
-        return;
+        return { id: r?.id }; // caller records this to keep re-runs idempotent
       } catch (e) {
         // a transient 500 / network drop must NOT flag markdown unsupported forever,
         // and must not re-POST (the first request may have committed → duplicate comment)
@@ -211,7 +211,8 @@ export class AdoClient {
         this.commentsMarkdownSupported = false;
       }
     }
-    await this.req("POST", `${this.scope(project)}/_apis/wit/workItems/${id}/comments?api-version=${API}-preview.4`, { text });
+    const r = await this.req("POST", `${this.scope(project)}/_apis/wit/workItems/${id}/comments?api-version=${API}-preview.4`, { text });
+    return { id: r?.id };
   }
 
   /** Replace an existing comment's text — same-day re-runs update, never duplicate. */

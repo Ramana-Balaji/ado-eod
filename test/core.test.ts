@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
-import { attribute, splitHours, eodMarker, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
+import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
 import { buildCreateOps } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
@@ -148,19 +148,36 @@ test("buildCreateOps pairs a Markdown format op for fields the rules mark as mar
   assert.equal(paths.includes("/multilineFieldsFormat/System.Description"), true); // description always Markdown
 });
 
-test("eod marker survives ADO's Markdown sanitization (no HTML comments) and is found", () => {
-  // ADO strips <!-- --> from Markdown comments — discovered live; marker must be inline code
-  const marker = eodMarker("2026-08-01", ["461712ca-full-id", "38869001-full-id"]);
-  assert.equal(marker.includes("<!--"), false);
-  assert.match(marker, EOD_MARKER_RE);
+test("legacy eod markers still match — old tickets update instead of duplicating", () => {
+  // comments posted before v0.5.1 carry the visible footer; keep honouring it
+  const legacy = "`eod:2026-08-01:461712ca,38869001`";
+  assert.match(legacy, EOD_MARKER_RE);
   const comments = [
-    { text: "unrelated" },
-    { text: `**2026-08-01 — implementation** (2h)\n\nwork\n\n---\n${marker}` },
-    { text: `old day\n\n---\n${eodMarker("2026-07-31", ["x"])}` },
+    { id: 1, text: "unrelated" },
+    { id: 2, text: `**implementation** (2h)\n\n- work\n\n---\n${legacy}` },
+    { id: 3, text: "old day\n\n---\n`eod:2026-07-31:x`" },
   ];
   assert.equal(findEodComment(comments, "2026-08-01"), comments[1]);
   assert.equal(findEodComment(comments, "2026-07-30"), undefined);
-  assert.equal(EOD_MARKER_RE.exec(comments[1].text)?.[1], "2026-08-01");
+});
+
+test("findEodComment: recorded id wins; same-day fallback needs author AND our header", () => {
+  const day = new Date("2026-08-07T10:00:00Z").getTime();
+  const win = { dayStartMs: day - 36e5, dayEndMs: day + 36e5, author: "Ramana Balaji" };
+  const mine = { id: 9, text: "**implementation** (2h)\n\n- did a thing", createdBy: "Ramana Balaji", createdDate: "2026-08-07T10:00:00Z" };
+  const handWritten = { id: 10, text: "Please also check the staging deploy", createdBy: "Ramana Balaji", createdDate: "2026-08-07T11:00:00Z" };
+  const someoneElse = { id: 11, text: "**implementation** (1h)\n\n- x", createdBy: "Other Person", createdDate: "2026-08-07T10:00:00Z" };
+
+  // the locally recorded id is authoritative
+  assert.equal(findEodComment([mine, handWritten], "2026-08-07", { ...win, knownId: 10 }), handWritten);
+  // no record → recognise our own generated comment by shape + author + day
+  assert.equal(findEodComment([handWritten, mine, someoneElse], "2026-08-07", win), mine);
+  // never adopt a hand-written note or another person's comment
+  assert.equal(findEodComment([handWritten, someoneElse], "2026-08-07", win), undefined);
+  // outside the day window → not today's
+  assert.equal(findEodComment([mine], "2026-08-07", { ...win, dayStartMs: day + 72e5, dayEndMs: day + 108e5 }), undefined);
+  // no author/window (unknown identity) → err toward a new comment
+  assert.equal(findEodComment([mine], "2026-08-07"), undefined);
 });
 
 test("cumulative hours math: add to current, floor remaining at 0", () => {
@@ -375,7 +392,7 @@ test("proseLines flags paragraph comments, allows bullets/headers/marker/signoff
   assert.equal(proseLines(bad)[0].startsWith("Built the Maestro"), true);
 });
 
-test("draft comment is bulleted and carries the date only once (in the marker)", async () => {
+test("draft comment is bulleted and contains no date and no eod marker", async () => {
   const draftRules = {
     ...rules,
     applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
@@ -400,8 +417,10 @@ test("draft comment is bulleted and carries the date only once (in the marker)",
   const c = drafts[0].commentMarkdown;
   assert.deepEqual(proseLines(c), [], `comment has prose: ${proseLines(c)}`);
   assert.equal(c.includes("- fix redirect"), true);
-  // the date appears exactly once — in the eod marker, not the header
-  assert.equal((c.match(/2026-08-06/g) ?? []).length, 1);
+  // the ticket shows only human content: no date echo, no `eod:` footer
+  assert.equal((c.match(/2026-08-06/g) ?? []).length, 0);
+  assert.equal(EOD_MARKER_RE.test(c), false);
+  assert.equal(c.includes("eod:"), false);
 });
 
 test("buildCreateOps emits the Hierarchy-Reverse parent link, and only when asked", () => {

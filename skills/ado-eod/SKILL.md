@@ -42,7 +42,8 @@ project, resolved from the work item itself.
 4. Ask ONLY for what `missingSections` lists — rare: the tester on completion, or a
    ticket with zero evidence today. Everything else ships as drafted.
 5. Wait for an explicit yes (with any edits applied). Then `eod_post` with
-   `confirmed: true` and the exact values the user saw. Report the per-ticket results.
+   `confirmed: true`, the exact values the user saw, and each draft's `date`.
+   Report the per-ticket results.
 
 Rules (enforced by the server, don't fight them): hours are cumulative and capped per
 day; the tool never proposes Closed — the tester closes after confirming; a same-day

@@ -68,6 +68,40 @@ export function writeUserRules(org: string, project?: string, dir = join(homedir
   return path;
 }
 
+/**
+ * Which comment we posted for a ticket on a given day. Keeps re-runs idempotent
+ * without printing an `eod:<date>` marker into the ticket for everyone to read.
+ * Machine-local: a re-run elsewhere falls back to same-day/author detection.
+ */
+const postedPath = (dir = join(homedir(), ".ado-eod")) => join(dir, "posted.json");
+
+export function rememberComment(key: string, commentId: number, dir?: string): void {
+  const path = postedPath(dir);
+  let doc: Record<string, number> = {};
+  try {
+    doc = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    /* first write, or corrupt — starting fresh only costs one duplicate comment */
+  }
+  doc[key] = commentId;
+  // keep the file small: drop entries older than ~60 days by date in the key
+  const cutoff = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+  for (const k of Object.keys(doc)) {
+    const d = k.split("/").pop() ?? "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < cutoff) delete doc[k];
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(doc, null, 2) + "\n");
+}
+
+export function recallComment(key: string, dir?: string): number | undefined {
+  try {
+    return JSON.parse(readFileSync(postedPath(dir), "utf8"))[key];
+  } catch {
+    return undefined;
+  }
+}
+
 /** Layered load: defaults → org file (optional) → user file. Later wins per top-level key. */
 export function loadRules(): { rules: Rules; sources: Record<string, string>; configErrors: string[] } {
   const layers: Array<{ path: string; label: string }> = [

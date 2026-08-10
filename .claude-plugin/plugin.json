@@ -1,6 +1,6 @@
 {
   "name": "ado-eod",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "End-of-day Azure DevOps ticket updates from your AI IDE \u2014 drafts comments, hours and state from your day's actual work; posts only after you confirm",
   "author": {
     "name": "Ramana Balaji"

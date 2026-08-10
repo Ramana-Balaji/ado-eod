@@ -4,11 +4,11 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { loadRules, writeUserRules } from "./rules.js";
+import { loadRules, writeUserRules, rememberComment, recallComment } from "./rules.js";
 import { parseAdoInput, parseWorkItemUrl } from "./setup.js";
-import { collectDay, localToday } from "./worklog.js";
+import { collectDay, localToday, dayRange } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, bulletList, proseLines, resolveSectionField, SCENARIO_HEADING_RE, EOD_MARKER_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, proseLines, resolveSectionField, SCENARIO_HEADING_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -23,6 +23,9 @@ function applyConfig(org: string, project?: string): string {
   ado = new AdoClient(rules);
   return path;
 }
+
+/** Local idempotency key — org-scoped so two orgs with the same ticket id never collide. */
+const postedKey = (ticketId: number, date: string) => `${rules.ado.org}/${ticketId}/${date}`;
 
 /** ADO-touching tools refuse with a pointer to setup instead of a stack trace. */
 function notReady() {
@@ -48,19 +51,19 @@ Daily flow — follow this order:
 2. eod_draft (pass pasted links in ticketUrls and/or bare ids in tickets; write "notes" YOURSELF — short bullet lines of fact from the worklog evidence and the live conversation, do NOT ask the user what they did; "completion" ONLY if the user said the work is complete, with "tester" if they named who tested; how it was verified goes in "testScenarios" — the server routes it to the org's field, never put it in notes).
 3. Show the full draft in chat IMMEDIATELY — no questions first: comment markdown, "Completed Xh → Yh · N% → M% done", proposed state, field changes, plus unattributed sessions. Sections in autoFilled were generated from evidence — the user edits if needed.
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
-5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made). Never post unreviewed.
+5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made), copying each draft's date field. Never post unreviewed.
 
 Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. To nest items pass parentId (or parentUrl) — the child is created in the parent's project and linked as its child; assignToSelf:true assigns it to the signed-in user. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
-Comments are BRIEF and BULLETED: pass "notes" as short bullet lines (one fact each), never a paragraph — the server REJECTS any comment containing a prose paragraph, and any comment over the line cap (default 25). Detail belongs in fields, not the comment. Do not put the date in the comment body; the eod footer carries it. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
+Comments are BRIEF and BULLETED: pass "notes" as short bullet lines (one fact each), never a paragraph — the server REJECTS any comment containing a prose paragraph, and any comment over the line cap (default 25). Detail belongs in fields, not the comment. Do not put the date in the comment body — ADO already stamps the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
 
 Projects are per-ticket: each draft carries its own project, so tickets from different projects work in one run with no reconfiguration.
 
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.5.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.5.1" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -94,8 +97,19 @@ server.tool(
     const blocked = notReady();
     if (blocked) return blocked;
     const ids = [...new Set([...(tickets ?? []), ...fromUrls.map((u) => u.id).filter((n): n is number => !!n)])];
-    const evidence = await collectDay(date ?? today(), rules);
-    const result = await buildDrafts(ado, rules, { evidence, tickets: ids.length ? ids : undefined, notes, completion, testScenarios });
+    const day = date ?? today();
+    const evidence = await collectDay(day, rules);
+    const range = dayRange(day);
+    const knownCommentIds: Record<number, number> = {};
+    for (const id of ids) {
+      const known = recallComment(postedKey(id, day));
+      if (known !== undefined) knownCommentIds[id] = known;
+    }
+    const authorDisplayName = await ado.whoAmI().then((m) => m.displayName).catch(() => undefined);
+    const result = await buildDrafts(ado, rules, {
+      evidence, tickets: ids.length ? ids : undefined, notes, completion, testScenarios,
+      knownCommentIds, authorDisplayName, dayStartMs: range.startMs, dayEndMs: range.endMs,
+    });
     return json(result);
   },
 );
@@ -182,6 +196,7 @@ server.tool(
       z.object({
         ticketId: z.number(),
         rev: z.number().describe("System.Rev read at draft time — write fails loudly if the item changed since"),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("The day this update covers — copy the draft's date. Drives same-day idempotency; defaults to today"),
         commentMarkdown: z.string(),
         completedWork: z.number().optional(),
         remainingWork: z.number().optional(),
@@ -210,13 +225,7 @@ server.tool(
           continue;
         }
 
-        // the marker is what makes re-runs idempotent — a draft that lost it must not post,
-        // or every retry would add a fresh comment and re-count the hours
-        const markerDate = u.commentMarkdown.match(EOD_MARKER_RE)?.[1];
-        if (!markerDate) {
-          results.push({ ticketId: u.ticketId, ok: false, error: "commentMarkdown is missing its `eod:` marker — post the draft's comment unmodified (edits are fine, the marker line must stay)" });
-          continue;
-        }
+        const markerDate = u.date ?? today();
 
         // concurrent-edit guard BEFORE we write anything: posting our own comment bumps
         // rev, so testing the draft-time rev inside the field PATCH would always fail
@@ -254,13 +263,25 @@ server.tool(
           continue;
         }
 
-        // idempotency: a same-day marker means UPDATE that comment and skip hour fields
+        // idempotency without a visible marker: the comment id we recorded locally, else
+        // a same-day comment of ours still on the ticket
+        const range = dayRange(markerDate);
         const comments = await ado.getComments(u.ticketId, wiProject);
-        const dup = findEodComment(comments, markerDate);
+        const dup = findEodComment(comments, markerDate, {
+          knownId: recallComment(postedKey(u.ticketId, markerDate)),
+          author: await ado.whoAmI().then((m) => m.displayName).catch(() => undefined),
+          dayStartMs: range.startMs,
+          dayEndMs: range.endMs,
+        });
         const skipHours = Boolean(dup);
 
-        if (dup) await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format, wiProject);
-        else await ado.addComment(u.ticketId, u.commentMarkdown, rules.comment.format, wiProject);
+        if (dup) {
+          await ado.updateComment(u.ticketId, dup.id, u.commentMarkdown, rules.comment.format, wiProject);
+          rememberComment(postedKey(u.ticketId, markerDate), dup.id);
+        } else {
+          const posted = await ado.addComment(u.ticketId, u.commentMarkdown, rules.comment.format, wiProject);
+          if (posted?.id) rememberComment(postedKey(u.ticketId, markerDate), posted.id);
+        }
 
         const fields: Record<string, any> = {};
         const markdownFields: string[] = [];

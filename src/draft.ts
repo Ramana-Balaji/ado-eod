@@ -8,6 +8,8 @@ export interface TicketDraft {
   rev?: number;
   /** The ticket's own project — people work across several, so post uses this, not a global default. */
   project?: string;
+  /** The day this draft covers — eod_post needs it for same-day idempotency. */
+  date?: string;
   title?: string;
   workItemType?: string;
   error?: string; // populated when the ticket can't be drafted (rules, not found…)
@@ -38,6 +40,10 @@ export interface DraftInput {
   tickets?: number[]; // explicit ticket ids from the user's message
   completion?: { ticketId: number; tester?: string }; // user says work is complete
   testScenarios?: string[]; // routed to the org's test-scenario FIELD, never the comment
+  knownCommentIds?: Record<number, number>; // ticketId → comment id we posted today
+  authorDisplayName?: string; // for recognising our own same-day comment
+  dayStartMs?: number;
+  dayEndMs?: number;
 }
 
 export function bulletList(items: string[]): string {
@@ -104,18 +110,38 @@ export async function resolveSectionField(
 /** A comment must never carry a test-scenarios section when the type has a real field for it. */
 export const SCENARIO_HEADING_RE = /^(#{1,6}\s*|\*\*)test.{0,3}enarios?/im;
 
-// ADO strips HTML comments (<!-- -->) from Markdown comments, so the idempotency marker
-// is a visible footer in inline code — quiet, greppable, and it survives sanitization.
+// Legacy: comments posted before v0.5.1 carry a visible `eod:<date>:` footer. Still
+// matched so those tickets keep being updated instead of gaining a duplicate — but
+// nothing writes it any more (the id is recorded locally, see rules.rememberComment).
 export const EOD_MARKER_RE = /`eod:(\d{4}-\d{2}-\d{2}):[^`]*`/;
 
-export function eodMarker(date: string, sessionIds: string[]): string {
-  return `\`eod:${date}:${sessionIds.map((s) => s.slice(0, 8)).join(",")}\``;
-}
+/** The generated header, e.g. "**implementation** (2h)" — used to recognise our own comment. */
+const EOD_HEADER_RE = /^\*\*[^*\n]+\*\*\s*\(\d+(?:\.\d+)?h\)\s*$/m;
 
-export function findEodComment<T extends { text: string }>(comments: T[], date: string): T | undefined {
+/**
+ * Today's already-posted eod comment, if any.
+ * knownId (from the local record) is authoritative; otherwise fall back to a comment
+ * written by this user on that local day that still looks like one of ours. The
+ * fallback deliberately errs toward "not found" — a duplicate comment beats
+ * overwriting somebody's hand-written note.
+ */
+export function findEodComment<T extends { id?: number; text: string; createdBy?: string; createdDate?: string }>(
+  comments: T[],
+  date: string,
+  opts: { knownId?: number; author?: string; dayStartMs?: number; dayEndMs?: number } = {},
+): T | undefined {
+  if (opts.knownId !== undefined) {
+    const byId = comments.find((c) => c.id === opts.knownId);
+    if (byId) return byId;
+  }
+  const legacy = comments.find((c) => c.text.match(EOD_MARKER_RE)?.[0].startsWith(`\`eod:${date}:`));
+  if (legacy) return legacy;
+  if (!opts.author || opts.dayStartMs === undefined) return undefined;
   return comments.find((c) => {
-    const m = c.text.match(EOD_MARKER_RE);
-    return m?.[0].startsWith(`\`eod:${date}:`);
+    if (c.createdBy !== opts.author || !c.createdDate) return false;
+    const t = new Date(c.createdDate).getTime();
+    if (isNaN(t) || t < opts.dayStartMs! || t >= (opts.dayEndMs ?? Infinity)) return false;
+    return EOD_HEADER_RE.test(c.text);
   });
 }
 
@@ -198,6 +224,7 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
       sessions: sessions.map((s) => s.sessionId),
       hours: hoursByTicket.get(ticketId) ?? 0,
       commentMarkdown: "",
+      date: input.evidence.date,
       missingSections: [],
       autoFilled: [],
       fieldAppends: [],
@@ -206,10 +233,13 @@ export async function buildDrafts(ado: AdoClient, rules: Rules, input: DraftInpu
       const wi = await ado.getWorkItem(ticketId);
       applyWorkItem(draft, wi, rules, callerEmail);
       const comments = await ado.getComments(ticketId, draft.project);
-      for (const c of comments) {
-        const m = c.text.match(EOD_MARKER_RE);
-        if (m && m[1] === input.evidence.date) draft.existingEodComment = { id: c.id, date: m[1] };
-      }
+      const existing = findEodComment(comments, input.evidence.date, {
+        knownId: input.knownCommentIds?.[ticketId],
+        author: input.authorDisplayName,
+        dayStartMs: input.dayStartMs,
+        dayEndMs: input.dayEndMs,
+      });
+      if (existing) draft.existingEodComment = { id: existing.id, date: input.evidence.date };
       await applyCompletion(draft, wi, ado, rules, input);
       const scenarioField = await resolveSectionField(ado, rules, draft.workItemType, "testScenarios", draft.project);
       buildComment(draft, sessions, input, rules, scenarioField);
@@ -372,5 +402,7 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
   } else if (draft.proposedState && draft.signoff && !draft.signoff.resolved) {
     body += "\n" + render(rules.comment.signoffTemplate, { testerMention: `@${draft.signoff.tester}` }) + "\n\n> ⚠ identity not resolved — mention will not notify";
   }
-  draft.commentMarkdown = body.trimEnd() + "\n\n---\n" + eodMarker(input.evidence.date, draft.sessions);
+  // no marker footer — the posted comment id is recorded locally instead, so the
+  // ticket shows only what a human wants to read
+  draft.commentMarkdown = body.trimEnd();
 }
