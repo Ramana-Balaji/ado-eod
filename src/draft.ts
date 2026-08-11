@@ -294,8 +294,12 @@ function applyWorkItem(draft: TicketDraft, wi: WorkItem, rules: Rules, callerEma
   // rules: who/what/where
   const a = rules.applies;
   const project = f["System.TeamProject"];
-  if (a.projects.length && !a.projects.includes(project)) draft.error = `rules: project "${project}" is not in applies.projects`;
-  if (a.workItemTypes.length && !a.workItemTypes.includes(draft.workItemType!)) draft.error = `rules: work item type "${draft.workItemType}" is not in applies.workItemTypes`;
+  // these are the user's own allow-lists — say how to widen them, or the caller reports
+  // a config choice as if the ticket were unreachable
+  if (a.projects.length && !a.projects.includes(project))
+    draft.error = `rules: project "${project}" is not in applies.projects (currently [${a.projects.join(", ")}]). This is a local allow-list, not a permission problem — add it, or set "applies: { projects: [] }" for any project, in ~/.ado-eod/rules.yaml`;
+  if (a.workItemTypes.length && !a.workItemTypes.includes(draft.workItemType!))
+    draft.error = `rules: work item type "${draft.workItemType}" is not in applies.workItemTypes (currently [${a.workItemTypes.join(", ")}]) — widen it in ~/.ado-eod/rules.yaml`;
   if (a.blockStates.includes(draft.currentState!)) draft.error = `rules: state "${draft.currentState}" is blocked`;
   if (callerEmail) {
     const assigned = (f["System.AssignedTo"]?.uniqueName ?? f["System.AssignedTo"]?.mail ?? "").toLowerCase();

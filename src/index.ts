@@ -65,7 +65,7 @@ A 403 on create names the project and area path it targeted — a wrong-project 
 
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.6.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.6.1" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
