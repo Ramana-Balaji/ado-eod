@@ -8,6 +8,11 @@ description: End-of-day Azure DevOps ticket update — collects today's work fro
 MCP server `ado-eod` provides all tools. If any tool call fails, run `eod_status` first
 and relay its message — it names the fix (sign-in, rules file, missing history).
 
+**Updates.** The server checks for a new release and installs it in the background. When
+a tool result contains `updateAvailable`, mention it once in a single line: a newer
+version is ready and applies after an IDE restart. `eod_update` forces it immediately.
+A user reporting a bug that is already fixed is almost always running a stale copy.
+
 ## First run (not configured yet)
 
 **Usually nothing to do** — pass any work item link the user pasted to `eod_draft`'s

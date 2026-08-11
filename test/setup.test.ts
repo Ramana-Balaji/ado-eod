@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { parseAdoInput, parseWorkItemUrl, upsertMarkerBlock, AG_MARKERS, hasAdoEodPlugin } from "../src/setup.js";
 import { writeUserRules } from "../src/rules.js";
+import { isNewer } from "../src/update.js";
 
 test("upsertMarkerBlock appends once, then replaces — never duplicates on re-run", () => {
   const v1 = upsertMarkerBlock("# my own rules\n", "ado-eod skill v1");
@@ -118,4 +119,13 @@ test("parseWorkItemUrl surfaces the org so a cross-org parent can be refused", (
   // ids are per-org: 22422 in another org is a different item entirely
   assert.equal(parseWorkItemUrl("https://dev.azure.com/otherorg/Proj/_workitems/edit/22422").org, "otherorg");
   assert.equal(parseWorkItemUrl("https://dev.azure.com/anugal/BTP%20Development/_workitems/edit/22422").org, "anugal");
+});
+
+test("isNewer compares releases without a semver dependency", () => {
+  assert.equal(isNewer("0.6.2", "0.7.0"), true);
+  assert.equal(isNewer("0.7.0", "0.7.0"), false);
+  assert.equal(isNewer("0.7.0", "0.6.9"), false);
+  assert.equal(isNewer("0.9.0", "0.10.0"), true); // not string comparison
+  assert.equal(isNewer("v1.0.0", "1.0.1"), true); // tolerates the v prefix
+  assert.equal(isNewer("0.0.0", "0.7.0"), true); // unknown local version → update
 });

@@ -22,9 +22,10 @@ function nodeBin(name: "node" | "npx"): string {
   return "npx"; // last resort — PATH lookup
 }
 
-// Running from the npx cache? That path gets evicted — configs must re-resolve via npx.
-// A local clone gets a stable node+path command instead (faster, works offline).
-const serverCmd = /[\\/]_npx[\\/]/.test(cliPath)
+// Where the IDEs will launch the server from. Mutable: setup upgrades an npx-cache
+// launch to a self-managed install when it can, because the shared npx cache never
+// refreshes itself — the single biggest source of "the fix didn't reach me".
+let serverCmd = /[\\/]_npx[\\/]/.test(cliPath)
   ? { command: nodeBin("npx"), args: ["-y", "github:Ramana-Balaji/ado-eod", "serve"] }
   : { command: nodeBin("node"), args: [cliPath, "serve"] };
 
@@ -197,6 +198,20 @@ const IDES: Ide[] = [
 export async function setup(argv: string[] = []): Promise<void> {
   console.log("ado-eod setup\n");
 
+  // Prefer a copy we own over the npx cache: it can be updated in place later and
+  // never gets evicted underneath the IDE.
+  if (serverCmd.command.includes("npx") && !argv.includes("--no-managed-install")) {
+    const { installLatest, managedCli, APP_DIR } = await import("./update.js");
+    process.stdout.write("  Installing ado-eod (first run builds from source, ~1-2 min)… ");
+    const r = await installLatest();
+    if (r.ok) {
+      serverCmd = { command: nodeBin("node"), args: [managedCli(), "serve"] };
+      console.log(`done\n  ✓ Installed to ${APP_DIR.replace(HOME, "~")} — updates apply here, no npx cache involved`);
+    } else {
+      console.log("could not install a managed copy; falling back to npx");
+    }
+  }
+
   // Org/project are NOT asked here — the first ticket link the user pastes in chat
   // carries both, and eod_configure saves them. Flags stay for scripted installs.
   const flag = (name: string) => {
@@ -266,6 +281,7 @@ export async function setup(argv: string[] = []): Promise<void> {
     }
   }
 
+  console.log(`\nUpdates: checked automatically; a new release installs in the background and applies on the next restart.`);
   console.log(`\nDone. Restart ${found.join(" / ")}, then paste any ticket link in chat:`);
   console.log("  \"update https://dev.azure.com/<org>/<project>/_workitems/edit/12345 with today's work\"");
   console.log("  (the link tells it your org and project — nothing else to configure)");

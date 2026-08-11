@@ -63,5 +63,9 @@ fields:
   # large-text fields written as Markdown (paired multilineFieldsFormat op)
   markdownFields: [System.Description, Microsoft.VSTS.Common.AcceptanceCriteria, Microsoft.VSTS.TCM.ReproSteps]
 
+update:
+  auto: true # install a new release in the background; it takes effect on the next IDE restart
+  checkIntervalHours: 6 # network check at most this often (never blocks a tool call)
+
 redact:
   extraPatterns: [] # additive only — base patterns cannot be removed

@@ -38,6 +38,8 @@ export interface Rules {
     markdownFields?: string[];
   };
   redact: { extraPatterns: string[] };
+  /** Self-update behaviour. auto=true installs a new release in the background at startup. */
+  update?: { auto?: boolean; checkIntervalHours?: number };
 }
 
 // Hard-coded, never overridable by any rules file.

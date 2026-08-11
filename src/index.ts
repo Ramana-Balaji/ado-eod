@@ -10,6 +10,7 @@ import { collectDay, localToday, dayRange } from "./worklog.js";
 import { AdoClient } from "./ado.js";
 import { buildDrafts, bulletList, proseLines, missingRequiredFields, resolveSectionField, SCENARIO_HEADING_RE, LEGACY_FOOTER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
+import { checkForUpdate, installLatest, markInstalled, currentVersion, managedCli, APP_DIR, UpdateStatus } from "./update.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
 // works in the same chat session without an IDE restart
@@ -22,6 +23,45 @@ function applyConfig(org: string, project?: string): string {
   ({ rules, sources, configErrors } = loadRules());
   ado = new AdoClient(rules);
   return path;
+}
+
+// Checked once at startup and refreshed lazily; surfaced on every tool result so a
+// stale install can't go unnoticed for weeks (it repeatedly has).
+let updateState: UpdateStatus = { current: currentVersion(), updateAvailable: false };
+let updateInstalled = false;
+
+async function refreshUpdateState(): Promise<void> {
+  try {
+    updateState = await checkForUpdate(rules.update?.checkIntervalHours ?? 6);
+    // already on disk from a previous run: nothing to fetch, just awaiting a restart
+    if (updateState.alreadyInstalled) updateInstalled = true;
+    else if (updateState.updateAvailable && rules.update?.auto !== false && !updateInstalled) {
+      // install into a directory we own; the running process keeps its loaded code,
+      // so this lands for the next launch — never mid-session
+      const r = await installLatest();
+      updateInstalled = r.ok;
+      // record it even on failure-to-match so a tag/package.json mismatch cannot
+      // turn every IDE restart into a fresh reinstall
+      if (r.ok) markInstalled(updateState.latest);
+    }
+  } catch {
+    /* an update check must never break the tool it is checking */
+  }
+}
+
+/** Appended to every tool result — silent when there is nothing to say. */
+function updateNotice(): Record<string, unknown> {
+  if (!updateState.updateAvailable) return {};
+  return {
+    updateAvailable: {
+      running: updateState.current,
+      latest: updateState.latest,
+      status: updateInstalled
+        ? `v${updateState.latest} has been installed to ${APP_DIR.replace(homedir(), "~")} — RESTART the IDE to run it (the current process keeps the old code)`
+        : "not installed automatically — run eod_update, or: npx github:Ramana-Balaji/ado-eod setup",
+      tellUser: true,
+    },
+  };
 }
 
 /** Local idempotency key — org-scoped so two orgs with the same ticket id never collide. */
@@ -37,7 +77,8 @@ function notReady() {
 const today = localToday;
 
 function json(data: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  const payload = data && typeof data === "object" && !Array.isArray(data) ? { ...(data as object), ...updateNotice() } : data;
+  return { content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }] };
 }
 
 // The workflow contract travels WITH the server — every MCP client gets it at initialize,
@@ -63,9 +104,11 @@ Projects are per-ticket: each draft carries its own project, so tickets from dif
 
 A 403 on create names the project and area path it targeted — a wrong-project target returns the same code as a real permission gap, so check the reported project before telling the user they lack access.
 
+If a tool result carries updateAvailable, TELL THE USER in one line: a newer ado-eod is installed and takes effect after they restart the IDE. Do not suppress it. eod_update installs on demand.
+
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.7.0" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.8.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -141,6 +184,30 @@ server.tool(
 );
 
 server.tool(
+  "eod_update",
+  "Install the latest ado-eod release. Safe to call any time; it only replaces this tool's own files. The running server keeps its loaded code, so the new version takes effect after an IDE restart.",
+  {},
+  async () => {
+    const before = await checkForUpdate(0); // force a fresh check
+    if (!before.updateAvailable) return json({ ok: true, upToDate: true, running: before.current, latest: before.latest });
+    const r = await installLatest();
+    updateInstalled = r.ok;
+    if (r.ok) markInstalled(before.latest);
+    updateState = before;
+    return json({
+      ok: r.ok,
+      running: before.current,
+      latest: before.latest,
+      installedTo: r.ok ? managedCli().replace(homedir(), "~") : undefined,
+      nextStep: r.ok
+        ? "Restart the IDE — the new version loads then. If your MCP config still points at npx, run: npx github:Ramana-Balaji/ado-eod setup"
+        : "Automatic install failed; run manually: rm -rf ~/.npm/_npx && npx github:Ramana-Balaji/ado-eod setup",
+      detail: r.output || undefined,
+    });
+  },
+);
+
+server.tool(
   "eod_status",
   "Diagnostics: auth identity, org/project, rules in force and their source files, which IDE histories exist. Run this when anything misbehaves.",
   {},
@@ -167,6 +234,8 @@ server.tool(
         cursor: existsSync(join(homedir(), ".cursor", "projects")),
         antigravity: "not minable (protobuf) — covered via git + live conversation",
       },
+      version: updateState.current,
+      latestRelease: updateState.latest ?? "(not checked)",
       commentsMarkdownSupported: ado.commentsMarkdownSupported ?? "not yet probed (first post decides)",
       patFallbackActive: Boolean(process.env.ADO_EOD_PAT),
     });
@@ -448,4 +517,6 @@ server.tool(
 
 export async function main() {
   await server.connect(new StdioServerTransport());
+  // fire-and-forget: startup must not wait on the network
+  void refreshUpdateState();
 }
