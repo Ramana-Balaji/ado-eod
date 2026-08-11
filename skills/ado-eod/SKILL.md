@@ -26,6 +26,10 @@ project, resolved from the work item itself.
 2. `eod_draft` with:
    - `ticketUrls`: full links the user pasted (preferred — they carry org/project)
    - `tickets`: bare work item ids the user typed
+   - `headline`: **one plain-English sentence** for whoever reads the ticket without
+     the code open — project manager, scrum master. What moved and why it matters. No
+     file names, identifiers, branches or commit hashes. It renders as the `Summary:`
+     line above the detail. Write it yourself; generated from evidence if omitted.
    - `notes`: what was actually done as **short bullet lines** (one fact per line) —
      **write it yourself** from the worklog evidence (prompts, files, commits) and the
      live conversation. Factual, no fluff, never a paragraph — the server rejects prose.
@@ -48,8 +52,9 @@ project, resolved from the work item itself.
 Rules (enforced by the server, don't fight them): hours are cumulative and capped per
 day; the tool never proposes Closed — the tester closes after confirming; a same-day
 re-run replaces the comment and skips hour fields (idempotent); comments are rejected
-if they contain a prose paragraph or exceed the line cap (default 25) — bullets only,
-details go in fields.
+if they contain a prose paragraph, an `eod:<date>` footer, or exceed the line cap
+(default 25) — bullets only, details go in fields. The date appears once, in the
+header — never add a date line of your own.
 All long-text content is posted as real Markdown; plain fields (title) stay plain.
 
 ## Creating a ticket

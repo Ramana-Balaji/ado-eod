@@ -8,7 +8,7 @@ import { loadRules, writeUserRules, rememberComment, recallComment } from "./rul
 import { parseAdoInput, parseWorkItemUrl } from "./setup.js";
 import { collectDay, localToday, dayRange } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, bulletList, proseLines, missingRequiredFields, resolveSectionField, SCENARIO_HEADING_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, proseLines, missingRequiredFields, resolveSectionField, SCENARIO_HEADING_RE, LEGACY_FOOTER_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -57,7 +57,7 @@ Ticket creation (eod_create): only on explicit request, after showing type+title
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
-Comments are BRIEF and BULLETED: pass "notes" as short bullet lines (one fact each), never a paragraph — the server REJECTS any comment containing a prose paragraph, and any comment over the line cap (default 25). Detail belongs in fields, not the comment. Do not put the date in the comment body — ADO already stamps the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
+Comment shape, all server-enforced: (a) "headline" is ONE plain-English sentence for non-technical readers (PM, scrum master) — no file names or identifiers; it renders as the "Summary:" line above the detail. (b) "notes" are short bullet lines, one fact each — a prose paragraph is REJECTED. (c) no eod:<date> footer and no date in the body — the header carries the date, and a footer is REJECTED. (d) over the line cap (default 25) is REJECTED. Detail belongs in fields, not the comment. All long-text content (description, acceptance criteria, test scenarios, comment) is written as real Markdown; plain fields like the title stay plain.
 
 Projects are per-ticket: each draft carries its own project, so tickets from different projects work in one run with no reconfiguration.
 
@@ -65,7 +65,7 @@ A 403 on create names the project and area path it targeted — a wrong-project 
 
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.6.2" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.7.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -82,6 +82,7 @@ server.tool(
     tickets: z.array(z.number()).optional().describe("Explicit work item ids from the user's message"),
     ticketUrls: z.array(z.string()).optional().describe("Work item LINKS the user pasted — preferred over ticket ids: they carry the org/project, so a first-time user needs no setup"),
     notes: z.string().optional().describe("Summary of the day's work from the live conversation"),
+    headline: z.string().optional().describe("ONE plain-English sentence for non-technical readers (project manager, scrum master): what moved and what it means. No file names, code identifiers, branch names or jargon — those go in notes. Generated from evidence if omitted."),
     completion: z
       .object({ ticketId: z.number(), tester: z.string().optional() })
       .optional()
@@ -91,7 +92,7 @@ server.tool(
       .optional()
       .describe("How the work was verified, as short bullets — the server routes these to the org's test-scenario FIELD; never paste them into notes or the comment"),
   },
-  async ({ date, tickets, ticketUrls, notes, completion, testScenarios }) => {
+  async ({ date, tickets, ticketUrls, notes, headline, completion, testScenarios }) => {
     // a pasted link carries org (+project) — adopt it so first use needs no setup
     const fromUrls = (ticketUrls ?? []).map(parseWorkItemUrl);
     const withOrg = fromUrls.find((u) => u.org);
@@ -109,7 +110,7 @@ server.tool(
     }
     const authorDisplayName = await ado.whoAmI().then((m) => m.displayName).catch(() => undefined);
     const result = await buildDrafts(ado, rules, {
-      evidence, tickets: ids.length ? ids : undefined, notes, completion, testScenarios,
+      evidence, tickets: ids.length ? ids : undefined, notes, headline, completion, testScenarios,
       knownCommentIds, authorDisplayName, dayStartMs: range.startMs, dayEndMs: range.endMs,
     });
     return json(result);
@@ -234,6 +235,12 @@ server.tool(
         const wi = await ado.getWorkItem(u.ticketId);
         if (wi.rev !== u.rev) {
           results.push({ ticketId: u.ticketId, ok: false, error: `ticket changed since draft (rev ${u.rev} → ${wi.rev}) — redraft with eod_draft and confirm again` });
+          continue;
+        }
+
+        // the date belongs in the header only — no eod:<date> footer, ever
+        if (LEGACY_FOOTER_RE.test(u.commentMarkdown)) {
+          results.push({ ticketId: u.ticketId, ok: false, error: "remove the `eod:<date>` footer from commentMarkdown — the date is in the header and this tool no longer uses a marker line" });
           continue;
         }
 

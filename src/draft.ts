@@ -10,6 +10,8 @@ export interface TicketDraft {
   project?: string;
   /** The day this draft covers — eod_post needs it for same-day idempotency. */
   date?: string;
+  /** One plain-English line for non-technical readers (PM / scrum master). */
+  headline?: string;
   title?: string;
   workItemType?: string;
   error?: string; // populated when the ticket can't be drafted (rules, not found…)
@@ -39,6 +41,7 @@ export interface DraftInput {
   notes?: string; // live-conversation context from the assistant
   tickets?: number[]; // explicit ticket ids from the user's message
   completion?: { ticketId: number; tester?: string }; // user says work is complete
+  headline?: string; // plain-English one-liner for non-technical readers
   testScenarios?: string[]; // routed to the org's test-scenario FIELD, never the comment
   knownCommentIds?: Record<number, number>; // ticketId → comment id we posted today
   authorDisplayName?: string; // for recognising our own same-day comment
@@ -70,8 +73,11 @@ export function toBullets(text: string): string {
   return bulletList(items.map((i) => i.replace(/\s*\.\s*$/, "")));
 }
 
-/** Lines a comment may contain besides bullets: headers, quotes, rules, the marker. */
-const ALLOWED_NON_BULLET = /^(\*\*|#{1,6}\s|>|---|\||`eod:)/;
+/** Lines a comment may contain besides bullets: bold/heading labels, quotes, rules, tables. */
+const ALLOWED_NON_BULLET = /^(\*\*|#{1,6}\s|>|---|\|)/;
+
+/** The retired `eod:<date>` footer. Rejected on post — the header already carries the date. */
+export const LEGACY_FOOTER_RE = /`?eod:\d{4}-\d{2}-\d{2}:?[^\s`]*`?/;
 
 /** Prose paragraphs that slipped into a comment — eod_post refuses these. */
 export function proseLines(comment: string): string[] {
@@ -358,6 +364,22 @@ function render(template: string, vars: Record<string, string | string[] | Array
   return out;
 }
 
+/**
+ * The PM line: what changed, in words a non-technical reader can act on. Kept to one
+ * line and free of file/identifier noise — that detail lives in the bullets below.
+ */
+function autoHeadline(draft: TicketDraft, hours: number, proposed: string | null | undefined): string {
+  const what = draft.title ?? `work item ${draft.ticketId}`;
+  if (proposed) return `${what} is finished and ready for testing.`;
+  const spent = hours > 0 ? ` (${hours}h today)` : "";
+  return `Work continued on ${what}${spent}; still in progress.`;
+}
+
+/** Collapse to a single line — the headline is one sentence, never a paragraph. */
+function oneLine(text: string): string {
+  return text.replace(/\s*\n+\s*/g, " ").replace(/^[-*•]\s+/, "").trim();
+}
+
 /** Factual summary from the day's own evidence — commit subjects first, session shape as fallback. */
 function autoSummary(draft: TicketDraft, sessions: SessionRecord[], input: DraftInput): string {
   const commits = [
@@ -404,12 +426,18 @@ function buildComment(draft: TicketDraft, sessions: SessionRecord[], input: Draf
     draft.fieldAppends.push({ field: scenarioField, markdown: bulletList(scenarios) });
   }
 
+  const headline = oneLine(input.headline ?? "") || autoHeadline(draft, draft.hours, draft.proposedState);
+  if (!input.headline) draft.autoFilled.push("headline");
+  draft.headline = headline;
+
   const inComment = scenarioField ? [] : scenarios; // field-routed scenarios stay out of the comment
   const vars: Record<string, any> = {
     date: input.evidence.date,
     workType: workTypes.join("+") || "implementation",
     hours: String(draft.hours),
     summary,
+    headline,
+    headlineSection: headline ? `**Summary:** ${headline}\n` : "",
     repos: repoRows,
     issues: [],
     testScenarios: inComment, // legacy templates that still loop over it keep working

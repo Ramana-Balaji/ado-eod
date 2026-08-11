@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
-import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, missingRequiredFields, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
+import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, missingRequiredFields, SCENARIO_HEADING_RE, EOD_MARKER_RE, LEGACY_FOOTER_RE } from "../src/draft.js";
 import { buildCreateOps, ruleErrors } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
@@ -256,7 +256,7 @@ test("draft auto-fills summary/next from evidence — never interrogates for dai
   assert.equal(d.missingSections.length, 0, `no questions for a daily update, got: ${d.missingSections}`);
   assert.equal(d.commentMarkdown.includes("fix redirect loop"), true);
   assert.equal(d.commentMarkdown.includes("Continue: Fix login redirect."), true);
-  assert.deepEqual(d.autoFilled, ["summary", "next"]);
+  assert.deepEqual(d.autoFilled.sort(), ["headline", "next", "summary"]);
   // explicit notes win over the auto summary
   const { drafts: d2 } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [42], notes: "Chased the redirect loop." });
   assert.equal(d2[0].commentMarkdown.includes("- Chased the redirect loop"), true); // bulleted, period trimmed
@@ -384,8 +384,8 @@ test("toBullets: prose, newline lists and existing bullets all become clean bull
   assert.equal(toBullets(""), "");
 });
 
-test("proseLines flags paragraph comments, allows bullets/headers/marker/signoff", () => {
-  const good = "**implementation** (2h)\n\n- did a thing\n- did another\n\n**Next:** more\n\n---\n`eod:2026-08-06:abc`";
+test("proseLines flags paragraph comments, allows bullets/headers/signoff", () => {
+  const good = "**implementation** — 2026-08-06\n\n**Summary:** Login work continued.\n\n- did a thing\n- did another\n\n**Next:** more";
   assert.deepEqual(proseLines(good), []);
   const bad = "**implementation** (2h)\n\nBuilt the Maestro provider configuration form across the React front-end.\n- ok";
   assert.equal(proseLines(bad).length, 1);
@@ -466,4 +466,51 @@ test("missingRequiredFields lists what the template demands and the caller didn'
   assert.deepEqual(missingRequiredFields(tf, { "Custom.Testsenarios": "- a" }), []);
   // empty string counts as missing — that is exactly what triggers InvalidEmpty
   assert.equal(missingRequiredFields(tf, { "Custom.Testsenarios": "" }).length, 1);
+});
+
+test("comment carries a PM headline, the date once in the header, and no eod footer", async () => {
+  const draftRules = {
+    ...rules,
+    applies: { projects: [], workItemTypes: [], onlyMyTickets: false, blockStates: [] },
+    comment: {
+      format: "markdown", required: [], maxLines: 25,
+      template: "**{{workType}}** — {{date}}\n\n{{headlineSection}}\n{{summary}}\n{{testScenariosSection}}\n**Next:** {{next}}",
+      signoffTemplate: "",
+    },
+    completion: { maxProposedState: "Resolved", requireTester: false },
+  } as Rules;
+  const fakeAdo = {
+    getWorkItem: async (id: number) => ({ id, rev: 1, fields: { "System.Title": "Echo DB backend status", "System.WorkItemType": "Task", "System.State": "Active", "System.TeamProject": "p" } }),
+    getComments: async () => [], getTypeFields: async () => [],
+  } as any;
+  const evidence: DayEvidence = {
+    date: "2026-08-07", sessions: [],
+    git: [{ repo: "/r/echo", branch: "b", commits: ["add read-only database block"], ticketIds: ["21637"], hasSession: true }],
+    redactedLineCount: 0,
+  };
+  // caller supplies the plain-English line
+  const { drafts } = await buildDrafts(fakeAdo, draftRules, {
+    evidence, tickets: [21637],
+    headline: "Admin screen now shows which database the service is using.",
+  });
+  const c = drafts[0].commentMarkdown;
+  assert.equal(c.includes("**Summary:** Admin screen now shows which database the service is using."), true);
+  assert.equal(drafts[0].headline?.includes("Admin screen"), true);
+  // date exactly once, in the header — and never an eod footer
+  assert.equal((c.match(/2026-08-07/g) ?? []).length, 1);
+  assert.equal(c.split("\n")[0], "**implementation** — 2026-08-07");
+  assert.equal(LEGACY_FOOTER_RE.test(c), false);
+  assert.deepEqual(proseLines(c), []); // the headline is a labelled line, not loose prose
+
+  // no headline supplied → generated, still one line, and flagged as auto-filled
+  const { drafts: auto } = await buildDrafts(fakeAdo, draftRules, { evidence, tickets: [21637] });
+  assert.equal(auto[0].autoFilled.includes("headline"), true);
+  assert.equal(auto[0].headline!.split("\n").length, 1);
+  assert.equal(auto[0].headline!.includes("Echo DB backend status"), true);
+});
+
+test("LEGACY_FOOTER_RE catches the footer shapes eod_post must reject", () => {
+  assert.equal(LEGACY_FOOTER_RE.test("work\n\n---\n`eod:2026-08-07:461712ca`"), true);
+  assert.equal(LEGACY_FOOTER_RE.test("work\n\neod:2026-08-07:"), true); // unfenced
+  assert.equal(LEGACY_FOOTER_RE.test("- shipped on 2026-08-07"), false); // a real date in content is fine
 });
