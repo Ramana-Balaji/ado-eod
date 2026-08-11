@@ -65,7 +65,7 @@ A 403 on create names the project and area path it targeted — a wrong-project 
 
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.6.1" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.6.2" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -345,9 +345,17 @@ server.tool(
 
     // ---- 1. Resolve the TARGET PROJECT first. Everything below is project-specific:
     // field discovery against the wrong project finds nothing and silently drops data.
-    const parent = parentId ?? (parentUrl ? parseWorkItemUrl(parentUrl).id : undefined);
+    const parsedParent = parentUrl ? parseWorkItemUrl(parentUrl) : undefined;
+    const parent = parentId ?? parsedParent?.id;
     if (parentUrl && parent === undefined)
       return json({ error: `could not read a work item id from parentUrl "${parentUrl}" — expected .../_workitems/edit/<id>. Pass parentId instead; refusing rather than creating in the default project` });
+    // work item ids are per-ORG: looking this id up in the configured org would silently
+    // resolve a different item and parent the new one to it
+    if (parsedParent?.org && parsedParent.org !== rules.ado.org)
+      return json({
+        error: `parentUrl is in organization "${parsedParent.org}" but ado-eod is configured for "${rules.ado.org}". Work item ids are per-organization, so id ${parent} means something else here — refusing.`,
+        fix: `Run eod_configure with ${parsedParent.org} (or paste a ticket from it into eod_draft) before creating there.`,
+      });
     let project: string | undefined;
     if (parent !== undefined) {
       // a child lives in its parent's project — cross-project hierarchy links are invalid

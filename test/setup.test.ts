@@ -113,3 +113,9 @@ test("parseWorkItemUrl extracts org/project/id — a pasted link is the whole co
   assert.deepEqual(parseWorkItemUrl("https://dev.azure.com/anugal/Proj"), { org: "anugal", project: "Proj", id: undefined });
   assert.equal(parseWorkItemUrl("not a url").id, undefined);
 });
+
+test("parseWorkItemUrl surfaces the org so a cross-org parent can be refused", () => {
+  // ids are per-org: 22422 in another org is a different item entirely
+  assert.equal(parseWorkItemUrl("https://dev.azure.com/otherorg/Proj/_workitems/edit/22422").org, "otherorg");
+  assert.equal(parseWorkItemUrl("https://dev.azure.com/anugal/BTP%20Development/_workitems/edit/22422").org, "anugal");
+});
