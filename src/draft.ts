@@ -107,6 +107,32 @@ export async function resolveSectionField(
   return fields.find((f) => re.test(f.name) || re.test(f.referenceName))?.referenceName || undefined;
 }
 
+/**
+ * Fields the process template demands that the caller has not supplied.
+ * Checked BEFORE the create so the failure names every field instead of coming back
+ * as a truncated TF401320 one field at a time. Fields ADO fills itself (defaults,
+ * system fields set on create) are not the caller's problem.
+ */
+const SELF_FILLED = new Set([
+  "System.Id", "System.Rev", "System.AreaPath", "System.IterationPath", "System.WorkItemType",
+  "System.State", "System.Reason", "System.CreatedBy", "System.CreatedDate",
+  "System.ChangedBy", "System.ChangedDate", "System.TeamProject", "System.Title",
+]);
+
+export function missingRequiredFields(
+  typeFields: Array<{ name: string; referenceName: string; alwaysRequired: boolean; defaultValue: unknown }>,
+  supplied: Record<string, unknown>,
+): Array<{ field: string; name: string }> {
+  return typeFields
+    .filter((f) => f.alwaysRequired && !SELF_FILLED.has(f.referenceName))
+    .filter((f) => f.defaultValue === null || f.defaultValue === undefined || f.defaultValue === "")
+    .filter((f) => {
+      const v = supplied[f.referenceName];
+      return v === undefined || v === null || v === "";
+    })
+    .map((f) => ({ field: f.referenceName, name: f.name }));
+}
+
 /** A comment must never carry a test-scenarios section when the type has a real field for it. */
 export const SCENARIO_HEADING_RE = /^(#{1,6}\s*|\*\*)test.{0,3}enarios?/im;
 

@@ -40,11 +40,12 @@ completion:
   maxProposedState: Resolved # tool never proposes Closed — tester closes
   requireTester: true # completion draft without a tester → ask
 
-testScenarioField: # field appends per work item type
-  User Story: Microsoft.VSTS.Common.AcceptanceCriteria
-  Bug: Microsoft.VSTS.TCM.ReproSteps
-acceptanceCriteriaField: # dedicated acceptance-criteria field per work item type
-  User Story: Microsoft.VSTS.Common.AcceptanceCriteria
+# Test-scenario / acceptance-criteria fields are DISCOVERED from each work item type's
+# own field list in the target project, so custom process templates work out of the box.
+# Add an entry here only to override that (an explicit mapping always wins) — shipping
+# guesses would override discovery with the wrong field in orgs that differ.
+testScenarioField: {}
+acceptanceCriteriaField: {}
 testerField: "" # identity field the sign-off tester is written to (e.g. Custom.Tester); empty = skip
 
 hours:

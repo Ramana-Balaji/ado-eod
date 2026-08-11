@@ -59,10 +59,20 @@ chat, wait for yes, then `eod_create` with `confirmed: true`. Never create as a 
 effect of the daily flow.
 
 **Use the dedicated args, not the Description.** Pass `acceptanceCriteria` and
-`testScenarios` as bullet arrays — the server routes them to the org's mapped fields
-and **rejects** a `descriptionMarkdown` that embeds an "Acceptance Criteria" or "Test
-scenarios" section. Description keeps only the narrative and links. The tester goes in
-the tester identity field via `fields`.
+`testScenarios` as bullet arrays — the server discovers the right field from the target
+project's type definition (no per-org config) and **rejects** a `descriptionMarkdown`
+that embeds an "Acceptance Criteria" or "Test scenarios" section. Description keeps only
+the narrative and links. The tester goes in the tester identity field via `fields`.
+
+**Nesting and projects.** `parentId` or `parentUrl` puts the item under that parent, in
+the parent's project. Without a parent, pass `project` or the configured default is
+used — the response always states which project was targeted.
+
+**When a create is refused:** the error names exactly what is wrong — every missing
+required field (pass them in `fields`), or a type with no AC/test-scenario field (add
+the named mapping to `~/.ado-eod/rules.yaml`). Fix what it names and retry once; never
+retry the identical call, and never conclude the user lacks permission from a 403 —
+check the `targetedProject` in the error first.
 
 ## Admin flow
 

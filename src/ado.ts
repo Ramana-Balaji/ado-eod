@@ -15,6 +15,39 @@ export interface WorkItem {
   fields: Record<string, any>;
 }
 
+export interface TypeField {
+  name: string;
+  referenceName: string;
+  /** The process template refuses a create without this field. */
+  alwaysRequired: boolean;
+  defaultValue: unknown;
+}
+
+/**
+ * Every field ADO refused, from a work-item error body. The list lives in
+ * RuleValidationErrors[]; customProperties carries a single-field variant.
+ */
+export function ruleErrors(body: string): Array<{ field: string; message: string }> {
+  let doc: any;
+  try {
+    doc = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  const out: Array<{ field: string; message: string }> = [];
+  const list = doc?.customProperties?.RuleValidationErrors ?? doc?.RuleValidationErrors ?? [];
+  for (const r of Array.isArray(list) ? list : []) {
+    const field = r?.fieldReferenceName ?? r?.FieldReferenceName ?? r?.fieldName ?? "?";
+    out.push({ field, message: [r?.errorMessage ?? r?.ErrorMessage, r?.fieldStatus ?? r?.FieldStatus].filter(Boolean).join(" ") || "rule error" });
+  }
+  if (!out.length) {
+    const f = doc?.customProperties?.FieldReferenceName ?? doc?.customProperties?.FieldName;
+    const m = doc?.message ?? doc?.customProperties?.errorMessage;
+    if (f || m) out.push({ field: f ?? "?", message: m ?? "rule error" });
+  }
+  return out;
+}
+
 export class AdoClient {
   private credential: ChainedTokenCredential | null = null;
   private base: string;
@@ -79,8 +112,16 @@ export class AdoClient {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      const err: any = new Error(`ADO ${method} ${url} → ${res.status}: ${text.slice(0, 400)}`);
+      // The 400 that matters most is a field-rule rejection, and RuleValidationErrors[]
+      // names every failing field — truncating the body hides exactly what to fix, so
+      // pull it out and put it FIRST, before any clipping.
+      const rule = ruleErrors(text);
+      const detail = rule.length
+        ? `${rule.map((r) => `${r.field}: ${r.message}`).join(" | ")} — full body: ${text.slice(0, 2000)}`
+        : text.slice(0, 2000);
+      const err: any = new Error(`ADO ${method} ${url} → ${res.status}: ${detail}`);
       err.status = res.status; // callers distinguish "param rejected" (4xx) from transient failures
+      err.ruleErrors = rule;
       throw err;
     }
     return res.status === 204 ? null : res.json();
@@ -144,18 +185,28 @@ export class AdoClient {
     }));
   }
 
-  private typeFieldsCache = new Map<string, Array<{ name: string; referenceName: string }>>();
+  private typeFieldsCache = new Map<string, TypeField[]>();
 
-  /** Fields available on a work item type — used to auto-discover custom AC / test-scenario fields. */
-  async getTypeFields(type: string, project?: string): Promise<Array<{ name: string; referenceName: string }>> {
-    const hit = this.typeFieldsCache.get(`${project ?? ""}:${type}`);
+  /**
+   * Fields on a work item type, including which ones the process template makes
+   * mandatory ($expand=all yields alwaysRequired). Drives both custom-field discovery
+   * and the pre-flight required-field check, so a fresh org needs no YAML.
+   */
+  async getTypeFields(type: string, project?: string): Promise<TypeField[]> {
+    const key = `${project ?? ""}:${type}`;
+    const hit = this.typeFieldsCache.get(key);
     if (hit) return hit;
     const r = await this.req(
       "GET",
-      `${this.scope(project)}/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields?api-version=${API}`,
+      `${this.scope(project)}/_apis/wit/workitemtypes/${encodeURIComponent(type)}/fields?$expand=all&api-version=${API}`,
     ).catch(() => ({ value: [] }));
-    const fields = (r.value ?? []).map((f: any) => ({ name: f.name ?? "", referenceName: f.referenceName ?? "" }));
-    this.typeFieldsCache.set(`${project ?? ""}:${type}`, fields);
+    const fields: TypeField[] = (r.value ?? []).map((f: any) => ({
+      name: f.name ?? "",
+      referenceName: f.referenceName ?? "",
+      alwaysRequired: Boolean(f.alwaysRequired),
+      defaultValue: f.defaultValue ?? null,
+    }));
+    this.typeFieldsCache.set(key, fields);
     return fields;
   }
 

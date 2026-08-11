@@ -8,7 +8,7 @@ import { loadRules, writeUserRules, rememberComment, recallComment } from "./rul
 import { parseAdoInput, parseWorkItemUrl } from "./setup.js";
 import { collectDay, localToday, dayRange } from "./worklog.js";
 import { AdoClient } from "./ado.js";
-import { buildDrafts, bulletList, proseLines, resolveSectionField, SCENARIO_HEADING_RE, findEodComment } from "./draft.js";
+import { buildDrafts, bulletList, proseLines, missingRequiredFields, resolveSectionField, SCENARIO_HEADING_RE, findEodComment } from "./draft.js";
 import { report, ReportView } from "./report.js";
 
 // let, not const — eod_configure reloads these in place so a fresh install
@@ -53,7 +53,7 @@ Daily flow — follow this order:
 4. Ask ONLY for what is in missingSections (rare: tester on completion, or zero evidence). Everything else ships as drafted.
 5. Only after an explicit yes: eod_post with confirmed=true and the exact values shown (with any edits the user made), copying each draft's date field. Never post unreviewed.
 
-Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. To nest items pass parentId (or parentUrl) — the child is created in the parent's project and linked as its child; assignToSelf:true assigns it to the signed-in user. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
+Ticket creation (eod_create): only on explicit request, after showing type+title+description and getting a yes. To nest items pass parentId (or parentUrl) — the child is created in the parent's project and linked as its child; assignToSelf:true assigns it to the signed-in user. The target project is resolved BEFORE fields, and the org's acceptance-criteria / test-scenario fields are discovered from that project's type definition, so no per-org config is needed. A create that would fail a required-field rule is refused first with the full list of missing fields — pass them via the fields arg and retry; do NOT retry blindly. Acceptance criteria go in the acceptanceCriteria arg and test scenarios in the testScenarios arg — NEVER inside descriptionMarkdown or a comment; the server routes them to the org's dedicated fields and rejects descriptions that embed them.
 
 Admin questions ("how did <project> go this week", "what has <person> been working on") → eod_report with view progress|people|breakdown|timeline.
 
@@ -61,9 +61,11 @@ Comments are BRIEF and BULLETED: pass "notes" as short bullet lines (one fact ea
 
 Projects are per-ticket: each draft carries its own project, so tickets from different projects work in one run with no reconfiguration.
 
+A 403 on create names the project and area path it targeted — a wrong-project target returns the same code as a real permission gap, so check the reported project before telling the user they lack access.
+
 Server-enforced (don't fight): hours cumulative with a daily cap; comment line cap; Closed/Removed never set — the tester closes; same-day re-runs update the existing comment idempotently. Any tool failure → run eod_status and relay its fix.`;
 
-export const server = new McpServer({ name: "ado-eod", version: "0.5.1" }, { instructions: INSTRUCTIONS });
+export const server = new McpServer({ name: "ado-eod", version: "0.6.0" }, { instructions: INSTRUCTIONS });
 
 server.tool(
   "eod_worklog",
@@ -329,6 +331,7 @@ server.tool(
     testScenarios: z.array(z.string()).optional().describe("Short bullets — the server routes these to the org's test-scenario field"),
     parentId: z.number().optional().describe("Link the new item as a CHILD of this work item id (Feature → User Story → Task). ADO rejects combinations its process template disallows."),
     parentUrl: z.string().optional().describe("Parent work item LINK, if the user pasted one instead of an id"),
+    project: z.string().optional().describe("Target project. Ignored when a parent is given (the child follows its parent); otherwise overrides the configured default"),
     assignToSelf: z.boolean().optional().describe("Assign to the authenticated user"),
     tags: z.array(z.string()).optional(),
     fields: z
@@ -336,26 +339,50 @@ server.tool(
       .optional()
       .describe("Additional fields by reference name (e.g. the tester identity field)"),
   },
-  async ({ type, title, descriptionMarkdown, acceptanceCriteria, testScenarios, parentId, parentUrl, assignToSelf, tags, fields: extraFields }) => {
+  async ({ type, title, descriptionMarkdown, acceptanceCriteria, testScenarios, parentId, parentUrl, project: projectArg, assignToSelf, tags, fields: extraFields }) => {
     const blocked = notReady();
     if (blocked) return blocked;
-    // seen live: AC pasted into the Description — refuse so it lands in the right field
-    // (explicit rules mapping, else auto-discovered from the type's own field list)
-    const acField = await resolveSectionField(ado, rules, type, "acceptanceCriteria");
-    const tsField = await resolveSectionField(ado, rules, type, "testScenarios");
+
+    // ---- 1. Resolve the TARGET PROJECT first. Everything below is project-specific:
+    // field discovery against the wrong project finds nothing and silently drops data.
+    const parent = parentId ?? (parentUrl ? parseWorkItemUrl(parentUrl).id : undefined);
+    if (parentUrl && parent === undefined)
+      return json({ error: `could not read a work item id from parentUrl "${parentUrl}" — expected .../_workitems/edit/<id>. Pass parentId instead; refusing rather than creating in the default project` });
+    let project: string | undefined;
+    if (parent !== undefined) {
+      // a child lives in its parent's project — cross-project hierarchy links are invalid
+      project = await ado.getProjectOf(parent).catch(() => undefined);
+      if (!project) return json({ error: `parent work item ${parent} not found or not readable — check the id/link` });
+    }
+    project = project ?? projectArg ?? rules.ado.project;
+    if (!project) return json({ error: "no target project — pass project, or parentId/parentUrl, or configure one with eod_configure" });
+
+    // ---- 2. Route the section args using THIS project's type definition
+    const acField = await resolveSectionField(ado, rules, type, "acceptanceCriteria", project);
+    const tsField = await resolveSectionField(ado, rules, type, "testScenarios", project);
     if (descriptionMarkdown && /acceptance criteria\s*[:*]/i.test(descriptionMarkdown) && !acceptanceCriteria?.length)
       return json({ error: "descriptionMarkdown contains an 'Acceptance Criteria' section — pass the bullets in the acceptanceCriteria arg instead (the server puts them in the org's dedicated field)" });
     if (descriptionMarkdown && /test scenarios\s*[:*]/i.test(descriptionMarkdown) && !testScenarios?.length)
       return json({ error: "descriptionMarkdown contains a 'Test scenarios' section — pass the bullets in the testScenarios arg instead" });
+
     const extra: Record<string, any> = { ...(extraFields ?? {}) };
-    if (acceptanceCriteria?.length) {
-      if (acField) extra[acField] = bulletList(acceptanceCriteria);
-      else descriptionMarkdown = `${descriptionMarkdown ?? ""}\n\n**Acceptance Criteria**\n${bulletList(acceptanceCriteria)}`.trim();
+    // Never quietly relocate supplied content into the Description — if the type has no
+    // such field, say so and name the rules.yaml key that would fix it.
+    for (const [kind, values, field] of [
+      ["acceptanceCriteria", acceptanceCriteria, acField],
+      ["testScenarios", testScenarios, tsField],
+    ] as const) {
+      if (!values?.length) continue;
+      if (!field)
+        return json({
+          error: `"${type}" in project "${project}" has no ${kind} field, and ${kind} was supplied. Add the mapping and retry.`,
+          fix: `${kind === "testScenarios" ? "testScenarioField" : "acceptanceCriteriaField"}:\n  ${type}: <Field.ReferenceName>`,
+          rulesFile: "~/.ado-eod/rules.yaml",
+          availableFields: (await ado.getTypeFields(type, project).catch(() => [])).map((f) => `${f.name} (${f.referenceName})`),
+        });
+      extra[field] = bulletList(values);
     }
-    if (testScenarios?.length) {
-      if (tsField) extra[tsField] = bulletList(testScenarios);
-      else descriptionMarkdown = `${descriptionMarkdown ?? ""}\n\n**Test scenarios**\n${bulletList(testScenarios)}`.trim();
-    }
+
     if (assignToSelf) {
       const email = (await ado.whoAmI()).email;
       // some identity providers omit the account property — "?" would hit ADO as a literal assignee
@@ -366,21 +393,40 @@ server.tool(
     // discovered section fields get the Markdown format op too, not just the static list
     const mdFields = [...new Set([...(rules.fields.markdownFields ?? []), acField, tsField].filter(Boolean) as string[])];
 
-    // a child is created in its PARENT's project — cross-project hierarchy links are invalid
-    const parent = parentId ?? (parentUrl ? parseWorkItemUrl(parentUrl).id : undefined);
-    let project: string | undefined;
-    if (parent) {
-      project = await ado.getProjectOf(parent).catch(() => undefined);
-      if (!project) return json({ error: `parent work item ${parent} not found or not readable — check the id/link` });
+    // ---- 3. Pre-flight the process template's required fields, so a create fails here
+    // with the full list rather than one truncated TF401320 at a time
+    const typeFields = await ado.getTypeFields(type, project).catch(() => []);
+    const supplied = { ...extra, "System.Description": descriptionMarkdown ?? "" };
+    const missing = missingRequiredFields(typeFields, supplied);
+    if (missing.length)
+      return json({
+        error: `"${type}" in project "${project}" requires ${missing.length} field(s) that were not supplied: ${missing.map((m) => `${m.name} (${m.field})`).join(", ")}`,
+        fix: "Pass each in the fields arg, e.g. fields: { \"" + missing[0].field + '": "..." }. If one is acceptance criteria or test scenarios, use those args and map the field in ~/.ado-eod/rules.yaml.',
+        missingFields: missing,
+      });
+
+    let wi;
+    try {
+      wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, mdFields, project, parent);
+    } catch (e: any) {
+      // a 403 here is ambiguous: no permission, OR the right permission on the wrong
+      // project/area. Always say what was targeted so the caller can tell them apart.
+      if (e?.status === 403)
+        return json({
+          error: `Azure DevOps refused the create (403) targeting project "${project}"${parent ? ` under parent ${parent}` : ""}.`,
+          targetedProject: project,
+          targetedAreaPath: extra["System.AreaPath"] ?? `(default root area of ${project})`,
+          note: "The same 403/TF401289 is returned for a wrong-project or wrong-area target as for a genuine permission gap — verify the project above is the intended one before concluding the user lacks access.",
+          detail: e.message?.slice(0, 800),
+        });
+      return json({ error: e.message?.slice(0, 1200), targetedProject: project, ruleErrors: e?.ruleErrors ?? [] });
     }
-    const wi = await ado.createWorkItem(type, title, descriptionMarkdown, extra, mdFields, project, parent);
-    const proj = project ?? rules.ado.project;
     return json({
       id: wi.id,
       rev: wi.rev,
       parent: parent ?? null,
-      project: proj,
-      url: `https://dev.azure.com/${rules.ado.org}/${encodeURIComponent(proj)}/_workitems/edit/${wi.id}`,
+      project,
+      url: `https://dev.azure.com/${rules.ado.org}/${encodeURIComponent(project)}/_workitems/edit/${wi.id}`,
     });
   },
 );

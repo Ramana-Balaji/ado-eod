@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
-import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
-import { buildCreateOps } from "../src/ado.js";
+import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, missingRequiredFields, SCENARIO_HEADING_RE, EOD_MARKER_RE } from "../src/draft.js";
+import { buildCreateOps, ruleErrors } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
 import type { DayEvidence, SessionRecord } from "../src/worklog.js";
@@ -431,4 +431,39 @@ test("buildCreateOps emits the Hierarchy-Reverse parent link, and only when aske
   // the link op comes after the field ops — ADO rejects relations before fields on create
   assert.equal(withParent.indexOf(rel) === withParent.length - 1, true);
   assert.equal(buildCreateOps("T", undefined, {}, []).some((o: any) => o.path === "/relations/-"), false);
+});
+
+test("ruleErrors extracts every failing field from an ADO error body (defect 2)", () => {
+  const body = JSON.stringify({
+    $id: "1",
+    customProperties: {
+      RuleValidationErrors: [
+        { fieldReferenceName: "Custom.Testsenarios", errorMessage: "TF401320: Rule Error for field Test senarios.", fieldStatus: "InvalidEmpty" },
+        { fieldReferenceName: "Custom.Complexity", errorMessage: "TF401320: Rule Error for field Complexity.", fieldStatus: "InvalidEmpty" },
+      ],
+    },
+    message: "TF401320: Rule Error",
+  });
+  const errs = ruleErrors(body);
+  assert.deepEqual(errs.map((e) => e.field), ["Custom.Testsenarios", "Custom.Complexity"]);
+  assert.equal(errs[0].message.includes("InvalidEmpty"), true);
+  // single-field variant and garbage must not throw
+  assert.equal(ruleErrors(JSON.stringify({ customProperties: { FieldReferenceName: "Custom.X" }, message: "boom" }))[0].field, "Custom.X");
+  assert.deepEqual(ruleErrors("<html>not json"), []);
+});
+
+test("missingRequiredFields lists what the template demands and the caller didn't send", () => {
+  const tf = [
+    { name: "Title", referenceName: "System.Title", alwaysRequired: true, defaultValue: null },
+    { name: "State", referenceName: "System.State", alwaysRequired: true, defaultValue: null },
+    { name: "Test senarios", referenceName: "Custom.Testsenarios", alwaysRequired: true, defaultValue: null },
+    { name: "Complexity", referenceName: "Custom.Complexity", alwaysRequired: true, defaultValue: "Medium" },
+    { name: "Notes", referenceName: "Custom.Notes", alwaysRequired: false, defaultValue: null },
+  ];
+  // Title/State are filled by ADO or the create itself; Complexity has a default
+  assert.deepEqual(missingRequiredFields(tf, {}), [{ field: "Custom.Testsenarios", name: "Test senarios" }]);
+  // supplying it clears the check
+  assert.deepEqual(missingRequiredFields(tf, { "Custom.Testsenarios": "- a" }), []);
+  // empty string counts as missing — that is exactly what triggers InvalidEmpty
+  assert.equal(missingRequiredFields(tf, { "Custom.Testsenarios": "" }).length, 1);
 });
