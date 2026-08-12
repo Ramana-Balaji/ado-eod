@@ -1,5 +1,16 @@
-import { ChainedTokenCredential, AzureCliCredential, InteractiveBrowserCredential, useIdentityPlugin } from "@azure/identity";
+import {
+  ChainedTokenCredential,
+  AzureCliCredential,
+  InteractiveBrowserCredential,
+  useIdentityPlugin,
+  serializeAuthenticationRecord,
+  deserializeAuthenticationRecord,
+  AuthenticationRecord,
+} from "@azure/identity";
 import { cachePersistencePlugin } from "@azure/identity-cache-persistence";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Rules } from "./rules.js";
 
 // Azure DevOps first-party resource id — constant across all orgs.
@@ -78,13 +89,43 @@ export class AdoClient {
     const pat = process.env.ADO_EOD_PAT;
     if (pat) return `Basic ${Buffer.from(`:${pat}`).toString("base64")}`;
     if (!this.credential) {
-      this.credential = new ChainedTokenCredential(
-        new AzureCliCredential(),
-        new InteractiveBrowserCredential({
-          redirectUri: "http://localhost:8400",
-          tokenCachePersistenceOptions: { enabled: true },
-        }),
-      );
+      // Without an AuthenticationRecord, InteractiveBrowserCredential ignores the
+      // persisted token cache and opens the browser on every new process. Load a
+      // saved record so later processes acquire silently; the first interactive
+      // sign-in saves it (see below).
+      const recordPath = join(homedir(), ".ado-eod", "auth-record.json");
+      let record: AuthenticationRecord | undefined;
+      try {
+        record = deserializeAuthenticationRecord(readFileSync(recordPath, "utf8"));
+      } catch {} // no record yet — first sign-in saves one
+      const browser = new InteractiveBrowserCredential({
+        redirectUri: "http://localhost:8400",
+        tokenCachePersistenceOptions: { enabled: true },
+        authenticationRecord: record,
+        // getToken() bypasses the public authenticate(), so hook the record here
+        disableAutomaticAuthentication: false,
+      });
+      const saveRecord = async () => {
+        if (record) return; // already have one on disk
+        try {
+          const rec = await browser.authenticate(SCOPE);
+          if (rec) {
+            mkdirSync(join(homedir(), ".ado-eod"), { recursive: true });
+            writeFileSync(recordPath, serializeAuthenticationRecord(rec), { mode: 0o600 });
+          }
+        } catch (e) {
+          // worst case: browser prompt again next run — not fatal, but say why on stderr
+          console.error(`ado-eod: could not persist sign-in (${(e as Error).message}) — browser will prompt again`);
+        }
+      };
+      // authenticate() both runs the interactive flow (or hits cache) and returns
+      // the record, so route the browser leg of the chain through it
+      this.credential = new ChainedTokenCredential(new AzureCliCredential(), {
+        getToken: async (scopes, options) => {
+          await saveRecord();
+          return browser.getToken(scopes, options);
+        },
+      });
     }
     // never hang a tool call on an abandoned browser prompt — fail with instructions instead
     const pending = this.credential.getToken(SCOPE);
