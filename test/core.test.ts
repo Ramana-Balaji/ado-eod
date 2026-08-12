@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
 import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, missingRequiredFields, SCENARIO_HEADING_RE, EOD_MARKER_RE, LEGACY_FOOTER_RE } from "../src/draft.js";
-import { buildCreateOps, ruleErrors, cachePersistenceHint } from "../src/ado.js";
+import { buildCreateOps, ruleErrors, cachePersistenceHint, allowPlaintextCache, isHeadless } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
 import type { DayEvidence, SessionRecord } from "../src/worklog.js";
@@ -516,12 +516,35 @@ test("LEGACY_FOOTER_RE catches the footer shapes eod_post must reject", () => {
 });
 
 test("cachePersistenceHint only fires for the Linux keyring failure it can actually fix", () => {
-  const keyring = new Error("Persistence check failed. Reason: libsecret not available");
-  // the case that matters: Linux, no libsecret, no opt-out set
-  assert.equal(cachePersistenceHint(keyring, "linux").includes("libsecret-1-dev"), true);
+  const keyring = new Error("Unable to read from the system keyring (libsecret).");
+  const strict = { ADO_EOD_STRICT_CACHE: "1" } as any;
+  // strict mode on Linux is the only case that still surfaces the keyring error
+  assert.equal(cachePersistenceHint(keyring, "linux", strict).includes("libsecret-1-dev"), true);
+  // default mode absorbs it into the 0600 file cache — no error to annotate
+  assert.equal(cachePersistenceHint(keyring, "linux", {} as any), "");
   // mac/Windows have their own backends — the advice would be wrong there
-  assert.equal(cachePersistenceHint(keyring, "darwin"), "");
-  assert.equal(cachePersistenceHint(keyring, "win32"), "");
+  assert.equal(cachePersistenceHint(keyring, "darwin", strict), "");
+  assert.equal(cachePersistenceHint(keyring, "win32", strict), "");
   // an unrelated Linux failure (expired token, network) must not blame the keyring
-  assert.equal(cachePersistenceHint(new Error("AADSTS700082: refresh token expired"), "linux"), "");
+  assert.equal(cachePersistenceHint(new Error("AADSTS700082: refresh token expired"), "linux", strict), "");
+});
+
+test("isHeadless picks device code only where no browser can open", () => {
+  // desktop Linux: a display is present, so the browser flow works
+  assert.equal(isHeadless({ DISPLAY: ":0" } as any, "linux"), false);
+  // SSH / container / CI: no display at all -> device code
+  assert.equal(isHeadless({} as any, "linux"), true);
+  // WSL has no DISPLAY but does hand the URL to the Windows browser
+  assert.equal(isHeadless({ WSL_DISTRO_NAME: "Ubuntu" } as any, "linux"), false);
+  // mac and Windows always have a browser
+  assert.equal(isHeadless({} as any, "darwin"), false);
+  assert.equal(isHeadless({} as any, "win32"), false);
+  // explicit override wins everywhere
+  assert.equal(isHeadless({ ADO_EOD_DEVICE_CODE: "1" } as any, "darwin"), true);
+});
+
+test("plaintext cache is the default, strict mode is opt-in", () => {
+  // WSL/Codespaces have no keyring; erroring there means re-signing in every call
+  assert.equal(allowPlaintextCache({} as any), true);
+  assert.equal(allowPlaintextCache({ ADO_EOD_STRICT_CACHE: "1" } as any), false);
 });

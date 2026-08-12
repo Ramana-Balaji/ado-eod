@@ -2,10 +2,12 @@ import {
   ChainedTokenCredential,
   AzureCliCredential,
   InteractiveBrowserCredential,
+  DeviceCodeCredential,
   useIdentityPlugin,
   serializeAuthenticationRecord,
   deserializeAuthenticationRecord,
   AuthenticationRecord,
+  TokenCredential,
 } from "@azure/identity";
 import { cachePersistencePlugin } from "@azure/identity-cache-persistence";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -63,10 +65,35 @@ export function ruleErrors(body: string): Array<{ field: string; message: string
  * A Linux box with no libsecret fails deep inside MSAL with a message that never
  * says "install libsecret" — so say it here, and only when that's plausibly it.
  */
-export function cachePersistenceHint(e: Error, platform = process.platform): string {
-  if (platform !== "linux" || process.env.ADO_EOD_ALLOW_PLAINTEXT_CACHE === "1") return "";
+export function cachePersistenceHint(e: Error, platform = process.platform, env = process.env): string {
+  // Outside strict mode the keyring failure is absorbed by the 0600 file cache,
+  // so there is no error to annotate.
+  if (platform !== "linux" || env.ADO_EOD_STRICT_CACHE !== "1") return "";
   if (!/secret|keyring|persistence|encrypt/i.test(e.message)) return "";
-  return " — on Linux the token cache needs libsecret (`apt install libsecret-1-dev`, `yum install libsecret-devel`); or set ADO_EOD_ALLOW_PLAINTEXT_CACHE=1 to cache unencrypted, or set ADO_EOD_PAT";
+  return " — on Linux the token cache needs libsecret (`apt install libsecret-1-dev`, `yum install libsecret-devel`); or unset ADO_EOD_STRICT_CACHE to cache in a 0600 file instead, or set ADO_EOD_PAT";
+}
+
+/**
+ * Whether to let MSAL keep the cache in a plaintext 0600 file when the OS keyring
+ * is unreachable. WSL, Codespaces and slim containers ship no libsecret/D-Bus at
+ * all, and refusing there means a fresh browser sign-in on every single call —
+ * so default to the file, matching what `az` itself does on Linux, and let the
+ * security-conscious force the strict behaviour back on.
+ */
+export function allowPlaintextCache(env = process.env): boolean {
+  return env.ADO_EOD_STRICT_CACHE !== "1";
+}
+
+/**
+ * No browser to open — SSH sessions, containers, headless CI. InteractiveBrowser
+ * would spend two minutes failing to launch one; device code prints a URL and a
+ * code instead and works anywhere.
+ */
+export function isHeadless(env = process.env, platform = process.platform): boolean {
+  if (env.ADO_EOD_DEVICE_CODE === "1") return true;
+  if (platform !== "linux") return false; // mac/Windows always have a way to open a browser
+  if (env.WSL_DISTRO_NAME || env.WSL_INTEROP) return false; // WSL hands off to the Windows browser
+  return !env.DISPLAY && !env.WAYLAND_DISPLAY;
 }
 
 export class AdoClient {
@@ -108,24 +135,30 @@ export class AdoClient {
       try {
         record = deserializeAuthenticationRecord(readFileSync(recordPath, "utf8"));
       } catch {} // no record yet — first sign-in saves one
-      const browser = new InteractiveBrowserCredential({
-        redirectUri: "http://localhost:8400",
-        tokenCachePersistenceOptions: {
-          enabled: true,
-          // Encryption backend is per-OS: Keychain (mac), DPAPI (Windows), libsecret
-          // (Linux). Where libsecret is absent — headless boxes, slim containers —
-          // the cache throws and every run re-prompts. Opt in to a plaintext cache
-          // there rather than making it the silent default.
-          unsafeAllowUnencryptedStorage: process.env.ADO_EOD_ALLOW_PLAINTEXT_CACHE === "1",
-        },
-        authenticationRecord: record,
-        // getToken() bypasses the public authenticate(), so hook the record here
-        disableAutomaticAuthentication: false,
-      });
+      // Encryption backend is per-OS: Keychain (mac), DPAPI (Windows), libsecret
+      // (Linux). Only the Linux and macOS branches honour this flag; Windows always
+      // has DPAPI, so it is a no-op there.
+      const tokenCachePersistenceOptions = { enabled: true, unsafeAllowUnencryptedStorage: allowPlaintextCache() };
+      const interactive: TokenCredential & { authenticate(scope: string): Promise<AuthenticationRecord | undefined> } =
+        isHeadless()
+          ? new DeviceCodeCredential({
+              tokenCachePersistenceOptions,
+              authenticationRecord: record,
+              // the default callback console.log()s, and stdout is the MCP JSON-RPC
+              // channel — anything written there corrupts the protocol
+              userPromptCallback: (info) => console.error(`ado-eod sign-in: ${info.message}`),
+            })
+          : new InteractiveBrowserCredential({
+              redirectUri: "http://localhost:8400",
+              tokenCachePersistenceOptions,
+              authenticationRecord: record,
+              // getToken() bypasses the public authenticate(), so hook the record here
+              disableAutomaticAuthentication: false,
+            });
       const saveRecord = async () => {
         if (record) return; // already have one on disk
         try {
-          const rec = await browser.authenticate(SCOPE);
+          const rec = await interactive.authenticate(SCOPE);
           if (rec) {
             mkdirSync(join(homedir(), ".ado-eod"), { recursive: true });
             writeFileSync(recordPath, serializeAuthenticationRecord(rec), { mode: 0o600 });
@@ -141,7 +174,7 @@ export class AdoClient {
         getToken: async (scopes, options) => {
           await saveRecord();
           try {
-            return await browser.getToken(scopes, options);
+            return await interactive.getToken(scopes, options);
           } catch (e) {
             throw new Error(`${(e as Error).message}${cachePersistenceHint(e as Error)}`);
           }
@@ -157,7 +190,12 @@ export class AdoClient {
       pending,
       new Promise<never>((_, rej) =>
         setTimeout(
-          () => rej(new Error("browser sign-in not completed within 2 minutes — ask the user to retry and finish the sign-in window, or use `az login` / set ADO_EOD_PAT")),
+          () =>
+            rej(
+              new Error(
+                `${isHeadless() ? "device-code sign-in" : "browser sign-in"} not completed within 2 minutes — ask the user to retry and finish signing in, or use \`az login\` / set ADO_EOD_PAT`,
+              ),
+            ),
           120_000,
         ).unref(),
       ),
