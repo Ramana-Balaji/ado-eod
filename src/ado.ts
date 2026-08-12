@@ -59,6 +59,16 @@ export function ruleErrors(body: string): Array<{ field: string; message: string
   return out;
 }
 
+/**
+ * A Linux box with no libsecret fails deep inside MSAL with a message that never
+ * says "install libsecret" — so say it here, and only when that's plausibly it.
+ */
+export function cachePersistenceHint(e: Error, platform = process.platform): string {
+  if (platform !== "linux" || process.env.ADO_EOD_ALLOW_PLAINTEXT_CACHE === "1") return "";
+  if (!/secret|keyring|persistence|encrypt/i.test(e.message)) return "";
+  return " — on Linux the token cache needs libsecret (`apt install libsecret-1-dev`, `yum install libsecret-devel`); or set ADO_EOD_ALLOW_PLAINTEXT_CACHE=1 to cache unencrypted, or set ADO_EOD_PAT";
+}
+
 export class AdoClient {
   private credential: ChainedTokenCredential | null = null;
   private base: string;
@@ -100,7 +110,14 @@ export class AdoClient {
       } catch {} // no record yet — first sign-in saves one
       const browser = new InteractiveBrowserCredential({
         redirectUri: "http://localhost:8400",
-        tokenCachePersistenceOptions: { enabled: true },
+        tokenCachePersistenceOptions: {
+          enabled: true,
+          // Encryption backend is per-OS: Keychain (mac), DPAPI (Windows), libsecret
+          // (Linux). Where libsecret is absent — headless boxes, slim containers —
+          // the cache throws and every run re-prompts. Opt in to a plaintext cache
+          // there rather than making it the silent default.
+          unsafeAllowUnencryptedStorage: process.env.ADO_EOD_ALLOW_PLAINTEXT_CACHE === "1",
+        },
         authenticationRecord: record,
         // getToken() bypasses the public authenticate(), so hook the record here
         disableAutomaticAuthentication: false,
@@ -123,7 +140,11 @@ export class AdoClient {
       this.credential = new ChainedTokenCredential(new AzureCliCredential(), {
         getToken: async (scopes, options) => {
           await saveRecord();
-          return browser.getToken(scopes, options);
+          try {
+            return await browser.getToken(scopes, options);
+          } catch (e) {
+            throw new Error(`${(e as Error).message}${cachePersistenceHint(e as Error)}`);
+          }
         },
       });
     }

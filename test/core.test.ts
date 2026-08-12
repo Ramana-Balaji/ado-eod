@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { activeMinutes, classifyWorkType, extractTicketIds, cleanPrompt, roundAndCapHours, dayRange, inRange, localToday, repoHasSession, pathsOverlap } from "../src/worklog.js";
 import { attribute, splitHours, findEodComment, buildDrafts, resolveSectionField, toBullets, proseLines, missingRequiredFields, SCENARIO_HEADING_RE, EOD_MARKER_RE, LEGACY_FOOTER_RE } from "../src/draft.js";
-import { buildCreateOps, ruleErrors } from "../src/ado.js";
+import { buildCreateOps, ruleErrors, cachePersistenceHint } from "../src/ado.js";
 import { BASE_REDACT_PATTERNS } from "../src/rules.js";
 import type { Rules } from "../src/rules.js";
 import type { DayEvidence, SessionRecord } from "../src/worklog.js";
@@ -513,4 +513,15 @@ test("LEGACY_FOOTER_RE catches the footer shapes eod_post must reject", () => {
   assert.equal(LEGACY_FOOTER_RE.test("work\n\n---\n`eod:2026-08-07:461712ca`"), true);
   assert.equal(LEGACY_FOOTER_RE.test("work\n\neod:2026-08-07:"), true); // unfenced
   assert.equal(LEGACY_FOOTER_RE.test("- shipped on 2026-08-07"), false); // a real date in content is fine
+});
+
+test("cachePersistenceHint only fires for the Linux keyring failure it can actually fix", () => {
+  const keyring = new Error("Persistence check failed. Reason: libsecret not available");
+  // the case that matters: Linux, no libsecret, no opt-out set
+  assert.equal(cachePersistenceHint(keyring, "linux").includes("libsecret-1-dev"), true);
+  // mac/Windows have their own backends — the advice would be wrong there
+  assert.equal(cachePersistenceHint(keyring, "darwin"), "");
+  assert.equal(cachePersistenceHint(keyring, "win32"), "");
+  // an unrelated Linux failure (expired token, network) must not blame the keyring
+  assert.equal(cachePersistenceHint(new Error("AADSTS700082: refresh token expired"), "linux"), "");
 });
