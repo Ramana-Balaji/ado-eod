@@ -548,3 +548,16 @@ test("plaintext cache is the default, strict mode is opt-in", () => {
   assert.equal(allowPlaintextCache({} as any), true);
   assert.equal(allowPlaintextCache({ ADO_EOD_STRICT_CACHE: "1" } as any), false);
 });
+
+test("computed AreaId/IterationId are never demanded from the caller", () => {
+  // real shape from a live Agile template: flagged alwaysRequired, no default, yet
+  // read-only — ADO derives them from the *Path fields and rejects direct writes
+  const typeFields = [
+    { name: "Iteration Id", referenceName: "System.IterationId", alwaysRequired: true, defaultValue: null },
+    { name: "Area Id", referenceName: "System.AreaId", alwaysRequired: true, defaultValue: null },
+    { name: "Value Area", referenceName: "Microsoft.VSTS.Common.ValueArea", alwaysRequired: true, defaultValue: "Business" },
+    { name: "Story Points", referenceName: "Microsoft.VSTS.Scheduling.StoryPoints", alwaysRequired: true, defaultValue: null },
+  ];
+  const missing = missingRequiredFields(typeFields, { "System.Title": "t", "System.Description": "d" });
+  assert.deepEqual(missing.map((m) => m.field), ["Microsoft.VSTS.Scheduling.StoryPoints"]); // a genuinely settable gap still reported
+});

@@ -120,6 +120,10 @@ export async function resolveSectionField(
  * system fields set on create) are not the caller's problem.
  */
 const SELF_FILLED = new Set([
+  // AreaId/IterationId are computed read-only mirrors of the *Path fields — the API
+  // rejects writes to them — yet templates still flag them alwaysRequired with no
+  // default. Asking the caller for them is asking for something unsettable.
+  "System.AreaId", "System.IterationId",
   "System.Id", "System.Rev", "System.AreaPath", "System.IterationPath", "System.WorkItemType",
   "System.State", "System.Reason", "System.CreatedBy", "System.CreatedDate",
   "System.ChangedBy", "System.ChangedDate", "System.TeamProject", "System.Title",
